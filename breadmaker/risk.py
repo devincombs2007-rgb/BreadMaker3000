@@ -8,9 +8,11 @@ without network calls, and it persists across restarts.
 """
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import RiskLimits
@@ -39,6 +41,107 @@ class KillSwitch:
     def release(self) -> None:
         """Only the authenticated owner (dashboard/CLI) should call this."""
         self.path.unlink(missing_ok=True)
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+class EngineHalts:
+    """Per-engine entry halts written by the risk layer into the shared (read-only for bots) dir.
+
+    * daily_loss  -> expires at the next 00:00 UTC
+    * drawdown    -> permanent until the owner releases it (password) and resets the high-water mark
+    File: HALT_<engine>.json  {"kind":..., "reason":..., "since":..., "until": iso|null}
+    """
+
+    def __init__(self, shared_dir: str | Path):
+        self.dir = Path(shared_dir)
+
+    def path(self, engine: str) -> Path:
+        return self.dir / f"HALT_{engine}.json"
+
+    def halt(self, engine: str, kind: str, reason: str, now: datetime, until: datetime | None) -> None:
+        cur = self.read(engine)
+        if cur and cur.get("kind") == "drawdown" and kind != "drawdown":
+            return  # never downgrade a permanent halt to an expiring one
+        _atomic_write(self.path(engine), json.dumps({
+            "kind": kind, "reason": reason, "since": now.isoformat(),
+            "until": until.isoformat() if until else None}))
+
+    def read(self, engine: str) -> dict | None:
+        try:
+            return json.loads(self.path(engine).read_text())
+        except FileNotFoundError:
+            return None
+        except (json.JSONDecodeError, OSError):
+            return {"kind": "corrupt", "reason": "unreadable halt file (fail closed)", "until": None}
+
+    def active(self, engine: str, now: datetime) -> dict | None:
+        h = self.read(engine)
+        if not h:
+            return None
+        if h.get("until"):
+            try:
+                if now >= datetime.fromisoformat(h["until"]):
+                    return None
+            except ValueError:
+                return h
+        return h
+
+    def release(self, engine: str | None = None) -> list[str]:
+        released = []
+        for p in self.dir.glob("HALT_*.json"):
+            eng = p.stem[len("HALT_"):]
+            if engine in (None, eng):
+                p.unlink(missing_ok=True)
+                released.append(eng)
+        return released
+
+    def all(self, now: datetime) -> dict[str, dict]:
+        out = {}
+        for p in self.dir.glob("HALT_*.json"):
+            eng = p.stem[len("HALT_"):]
+            h = self.active(eng, now)
+            if h:
+                out[eng] = h
+        return out
+
+
+def next_utc_midnight(now: datetime) -> datetime:
+    return (now.astimezone(timezone.utc) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def write_monitor_heartbeat(shared_dir: str | Path, engine: str, now: datetime | None = None) -> None:
+    """Proof that the out-of-process risk monitor is alive AND can see this engine's equity.
+    Trading bots refuse new entries when this is missing or stale (fail closed)."""
+    now = now or datetime.now(timezone.utc)
+    _atomic_write(Path(shared_dir) / f"MONITOR_OK_{engine}", now.isoformat())
+
+
+def request_peak_reset(shared_dir: str | Path, now: datetime | None = None) -> None:
+    """Owner action: after releasing a drawdown halt, start a new high-water mark."""
+    _atomic_write(Path(shared_dir) / "PEAK_RESET", (now or datetime.now(timezone.utc)).isoformat())
+
+
+def update_equity_state(state: dict, equity: float, now: datetime, shared_dir: str | Path) -> dict:
+    """Maintain day-start and peak equity across restarts (state is persisted by the caller)."""
+    today = now.astimezone(timezone.utc).date().isoformat()
+    if state.get("day") != today:
+        state["day"], state["day_start"] = today, equity
+    try:
+        reset = (Path(shared_dir) / "PEAK_RESET").read_text().strip()
+    except FileNotFoundError:
+        reset = None
+    if reset and reset != state.get("peak_reset_seen"):
+        state["peak"] = equity
+        state["day_start"] = equity
+        state["peak_reset_seen"] = reset
+    state["peak"] = max(state.get("peak") or equity, equity)
+    return state
 
 
 @dataclass
@@ -84,10 +187,12 @@ def size_position(equity: float, price: float, stop_price: float, limits: RiskLi
 
 
 class RiskEngine:
-    def __init__(self, limits: RiskLimits, kill_switch: KillSwitch, conn: sqlite3.Connection):
+    def __init__(self, limits: RiskLimits, kill_switch: KillSwitch, conn: sqlite3.Connection,
+                 halts: EngineHalts | None = None):
         self.limits = limits
         self.kill_switch = kill_switch
         self.conn = conn
+        self.halts = halts or EngineHalts(kill_switch.path.parent)
 
     def log(self, engine: str, severity: str, rule: str, detail: str) -> None:
         self.conn.execute(
@@ -96,20 +201,28 @@ class RiskEngine:
         )
 
     # ---- portfolio-level checks -----------------------------------------
-    def check_portfolio(self, engine: str, state: PortfolioState) -> list[str]:
-        """Returns breached rules. Drawdown breach engages the kill switch."""
+    def check_portfolio(self, engine: str, state: PortfolioState, now: datetime | None = None) -> list[str]:
+        """Returns breached rules and records a persistent per-engine halt:
+        daily loss -> entries halted until next 00:00 UTC; drawdown -> halted until owner release."""
+        now = now or datetime.now(timezone.utc)
         breaches = []
         if state.day_start_equity > 0:
             daily = state.equity / state.day_start_equity - 1
             if daily <= -self.limits.daily_loss_halt_pct:
-                breaches.append(f"daily_loss {daily:.2%} <= -{self.limits.daily_loss_halt_pct:.2%}")
+                msg = f"daily_loss {daily:.2%} <= -{self.limits.daily_loss_halt_pct:.2%}"
+                breaches.append(msg)
+                if not self.halts.active(engine, now):
+                    self.log(engine, "critical", "portfolio_limit", msg)
+                self.halts.halt(engine, "daily_loss", msg, now, next_utc_midnight(now))
         if state.peak_equity > 0:
             dd = state.equity / state.peak_equity - 1
             if dd <= -self.limits.max_drawdown_halt_pct:
-                breaches.append(f"drawdown {dd:.2%} <= -{self.limits.max_drawdown_halt_pct:.2%}")
-                self.kill_switch.engage(f"[{engine}] drawdown {dd:.2%}")
-        for b in breaches:
-            self.log(engine, "critical", "portfolio_limit", b)
+                msg = f"drawdown {dd:.2%} <= -{self.limits.max_drawdown_halt_pct:.2%}"
+                breaches.append(msg)
+                cur = self.halts.active(engine, now)
+                if not cur or cur.get("kind") != "drawdown":
+                    self.log(engine, "critical", "portfolio_limit", msg)
+                self.halts.halt(engine, "drawdown", msg, now, None)
         return breaches
 
     # ---- order-level checks ----------------------------------------------
@@ -146,7 +259,10 @@ class RiskEngine:
         elif intent.side == "buy":
             if self.kill_switch.engaged():
                 reasons.append(f"kill switch engaged: {self.kill_switch.reason()}")
-            reasons.extend(self.check_portfolio(intent.engine, state))
+            reasons.extend(self.check_portfolio(intent.engine, state, now))
+            halt = self.halts.active(intent.engine, now)
+            if halt and not any(halt.get("reason", "") == r for r in reasons):
+                reasons.append(f"engine halted ({halt.get('kind')}): {halt.get('reason')}")
             if intent.stop_price is None or not (0 < intent.stop_price < intent.price):
                 reasons.append("buy requires a protective stop below price")
                 max_qty = 0.0

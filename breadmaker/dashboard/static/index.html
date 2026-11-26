@@ -61,7 +61,8 @@ function engineCard(e){
   const pos=(e.positions||[]).map(p=>`<tr><td>${esc(p.symbol)}</td><td class="r num">${Number(p.qty).toPrecision(4)}</td><td class="r num">${usd(p.value)}</td><td class="r num ${cls(p.unrealized)}">${usd(p.unrealized)}</td></tr>`).join("");
   const fills=(e.recent_fills||[]).slice(0,8).map(f=>`<tr><td>${esc((f.ts||"").slice(5,16))}</td><td>${esc(f.side)}</td><td>${esc(f.symbol)}</td><td class="r num">${usd(f.qty*f.price)}</td></tr>`).join("");
   return `<div class="card">
-   <div class="row"><b>${esc(e.engine)}</b><span class="pill">${esc(e.asset_class||"")}</span></div>
+   <div class="row"><b>${esc(e.engine)}${e.shadow?' <span class="mute">(shadow)</span>':""}</b><span class="pill">${esc(e.asset_class||"")}</span></div>
+   ${e.halt?`<div class="bad" style="font-size:13px;margin:4px 0">⛔ Entries halted (${esc(e.halt.kind)}): ${esc(e.halt.reason)}${e.halt.until?" · until "+esc(e.halt.until.slice(0,16)):" · until you release it"}</div>`:""}
    <div class="row"><span class="big num">${usd(e.equity)}</span><span class="num ${cls(e.total_pnl)}">${usd(e.total_pnl)} (${pct(e.total_return)})</span></div>
    ${e.equity_source==="cost_basis"?'<div class="mute">Not yet marked to market (no snapshot).</div>':""}
    ${spark(e.equity_curve)}
@@ -82,11 +83,12 @@ async function act(path,body){
   const r=await fetch(path,{method:"POST",headers:{"X-BM-CSRF":CSRF},body});
   if(!r.ok)alert("Failed: "+r.status); load();
 }
-function killCard(k,limits){
-  if(k.engaged){
-    $("killcard").innerHTML=`<div class="row"><b class="bad">⛔ KILL SWITCH ENGAGED</b></div><div class="mute">${esc(k.reason)}</div>
-     <div class="mute" style="margin:8px 0">New entries are blocked on every engine. Exits still work.</div>
-     <form id="rel"><input type="password" name="password" placeholder="Password to release" style="width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);margin-bottom:8px;font-size:16px;background:var(--bg);color:var(--ink)" required><button class="ghost">Release kill switch</button></form>`;
+function killCard(k,limits,halts){
+  const nh=Object.keys(halts||{}).length;
+  if(k.engaged||nh){
+    $("killcard").innerHTML=`<div class="row"><b class="bad">⛔ ${k.engaged?"KILL SWITCH ENGAGED":nh+" ENGINE HALT(S)"}</b></div><div class="mute">${esc(k.reason)}</div>
+     <div class="mute" style="margin:8px 0">${k.engaged?"New entries are blocked on every engine.":"New entries are blocked on the halted engine(s)."} Exits still work. Releasing also starts a new high-water mark.</div>
+     <form id="rel"><input type="password" name="password" placeholder="Password to release" style="width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);margin-bottom:8px;font-size:16px;background:var(--bg);color:var(--ink)" required><button class="ghost">Release and resume</button></form>`;
     $("rel").onsubmit=e=>{e.preventDefault();act("/api/kill/release",new FormData(e.target))};
   }else{
     $("killcard").innerHTML=`<div class="row"><b class="ok">● Risk engine active</b><span class="mute">DD halt ${pct(-limits.max_drawdown_halt_pct)} · day ${pct(-limits.daily_loss_halt_pct)}</span></div>
@@ -99,7 +101,7 @@ async function load(){
   if(r.status===401){location="/login";return}
   const d=await r.json();
   $("upd").textContent="Updated "+new Date(d.generated_at).toLocaleTimeString();
-  killCard(d.kill_switch,d.risk_limits);
+  killCard(d.kill_switch,d.risk_limits,d.halts);
   const c=d.combined,pnl=c.equity-c.initial;
   $("combined").textContent=usd(c.equity);
   $("combinedsub").innerHTML=`<span class="${cls(pnl)}">${usd(pnl)} (${pct(c.initial?pnl/c.initial:0)})</span> on ${usd(c.initial)} virtual capital`;

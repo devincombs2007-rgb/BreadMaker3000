@@ -12,7 +12,7 @@ def test_settings_load(tmp_settings):
     assert tmp_settings.risk.max_risk_per_trade_pct == 0.005
     assert tmp_settings.risk.daily_loss_halt_pct == 0.01
     assert tmp_settings.risk.max_drawdown_halt_pct == 0.05
-    assert sum(e.initial_capital for e in tmp_settings.engines.values()) == 3000
+    assert sum(e.initial_capital for e in tmp_settings.engines.values() if not e.shadow) == 3000
 
 
 def test_non_simulation_mode_rejected(tmp_path):

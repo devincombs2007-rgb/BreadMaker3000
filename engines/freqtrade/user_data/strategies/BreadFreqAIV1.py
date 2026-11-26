@@ -11,15 +11,24 @@ any promotion. Same risk sizing and kill switch as the baseline.
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
+
+import logging
 
 import numpy as np
 from pandas import DataFrame
 
+from freqtrade.enums import RunMode
 from freqtrade.strategy import IStrategy
 
-KILL_SWITCH = Path(os.environ.get("BREADMAKER_KILL_SWITCH", "/freqtrade/user_data/shared/KILL_SWITCH"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bread_risk_gate import entry_allowed  # noqa: E402
+
+SHARED_DIR = Path(os.environ.get("BREADMAKER_SHARED_DIR", "/freqtrade/user_data/shared"))
+ENGINE = os.environ.get("BREADMAKER_ENGINE", "freqai_shadow")
+logger = logging.getLogger(__name__)
 MAX_POSITION_PCT = 0.10
 MAX_RISK_PER_TRADE_PCT = 0.005
 ROUND_TRIP_COST = 0.010  # conservative: 2 x (0.40% fee + 0.10% spread/slippage)
@@ -31,6 +40,8 @@ class BreadFreqAIV1(IStrategy):
     timeframe = "1h"
     startup_candle_count = 100
     process_only_new_candles = True
+    # Ignore entry signals from candles that closed > 10 min ago (e.g. after a restart/outage).
+    ignore_buying_expired_candle_after = 600
     stoploss = -0.05
     minimal_roi = {"0": 0.20, "1440": 0.10}
     use_exit_signal = True
@@ -91,7 +102,14 @@ class BreadFreqAIV1(IStrategy):
 
     def confirm_trade_entry(self, pair, order_type, amount, rate, time_in_force, current_time,
                             entry_tag, side, **kwargs) -> bool:
-        return side == "long" and not KILL_SWITCH.exists()
+        if side != "long":
+            return False
+        if self.dp is not None and self.dp.runmode not in (RunMode.DRY_RUN, RunMode.LIVE):
+            return True
+        ok, reason = entry_allowed(SHARED_DIR, ENGINE, current_time)
+        if not ok:
+            logger.warning("BreadMaker risk gate blocked %s entry: %s", pair, reason)
+        return ok
 
     def leverage(self, *args, **kwargs) -> float:
         return 1.0

@@ -66,17 +66,22 @@ def test_no_shorting(risk):
 def test_daily_loss_halts_entries(risk):
     d = risk.evaluate(buy(coid="d"), state(equity=989, day_start_equity=1000), NOW)
     assert not d.approved and any("daily_loss" in r for r in d.reasons)
-    assert not risk.kill_switch.engaged()  # daily loss halts, drawdown kills
+    assert risk.halts.active("freqtrade", NOW)["kind"] == "daily_loss"
 
 
-def test_drawdown_engages_kill_switch_but_exits_allowed(risk):
+def test_drawdown_halts_engine_but_exits_allowed(risk):
     d = risk.evaluate(buy(coid="dd"), state(equity=949, day_start_equity=950, peak_equity=1000), NOW)
-    assert not d.approved and risk.kill_switch.engaged()
-    assert not risk.evaluate(buy(coid="dd2"), state(), NOW).approved  # persists
+    assert not d.approved and risk.halts.active("freqtrade", NOW)["kind"] == "drawdown"
+    assert not risk.evaluate(buy(coid="dd2"), state(), NOW).approved  # persists after recovery
     sell = OrderIntent("freqtrade", "BTC/USD", "sell", 1.0, 50.0, "exit", NOW)
     assert risk.evaluate(sell, state(positions_qty={"BTC/USD": 1.0}), NOW).approved
-    risk.kill_switch.release()
+    risk.halts.release()
     assert risk.evaluate(buy(coid="dd3"), state(), NOW).approved
+
+
+def test_global_kill_switch_blocks_buys(risk):
+    risk.kill_switch.engage("owner")
+    assert not risk.evaluate(buy(coid="k"), state(), NOW).approved
 
 
 def test_rejections_are_logged(risk):

@@ -51,20 +51,28 @@ def main(interval: int = 60) -> None:
     except (FileNotFoundError, json.JSONDecodeError):
         state = {}
 
-    ft = None
-    if os.environ.get("FREQTRADE_API_URL"):
-        from ..integrations.freqtrade_client import FreqtradeClient
-        ft = FreqtradeClient(os.environ["FREQTRADE_API_URL"], os.environ.get("FREQTRADE_API_USER", "breadmaker"),
-                             os.environ.get("FREQTRADE__API_SERVER__PASSWORD", ""))
+    # FREQTRADE_INSTANCES="freqtrade=http://freqtrade:8080,freqai_shadow=http://freqai:8081"
+    from ..integrations.freqtrade_client import FreqtradeClient
+    instances = {}
+    spec = os.environ.get("FREQTRADE_INSTANCES") or (
+        f"freqtrade={os.environ['FREQTRADE_API_URL']}" if os.environ.get("FREQTRADE_API_URL") else "")
+    for item in filter(None, (x.strip() for x in spec.split(","))):
+        name, url = item.split("=", 1)
+        instances[name] = FreqtradeClient(url, os.environ.get("FREQTRADE_API_USER", "breadmaker"),
+                                          os.environ.get("FREQTRADE__API_SERVER__PASSWORD", ""))
     report_dir = settings.data_dir / "reports"
     last_report_day = state.get("last_report_day")
 
     while _running:
         try:
-            if ft is not None:
-                from .freqtrade_sentinel import run_once
-                res = run_once(ft, conn, risk, state.setdefault("freqtrade", {}))
-                log.info("freqtrade sentinel: %s", res)
+            from .freqtrade_sentinel import run_once
+            for name, client in instances.items():
+                try:
+                    res = run_once(client, conn, risk, state.setdefault(name, {}), engine=name)
+                except Exception as exc:  # one instance failing must not stop monitoring of others
+                    res = {"ok": False, "error": repr(exc)[:200]}
+                    risk.log(name, "warning", "sentinel_error", res["error"])
+                log.info("sentinel %s: %s", name, res)
             mem = psutil.virtual_memory().percent
             cpu = psutil.cpu_percent(interval=None)
             disk = psutil.disk_usage(str(settings.data_dir)).percent

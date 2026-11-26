@@ -34,7 +34,7 @@ from ..db import connect
 from ..ledger import Ledger
 from ..metrics import max_drawdown, sharpe, sortino, trade_stats
 from ..orchestrator.heartbeat import worker_status
-from ..risk import KillSwitch, RiskEngine
+from ..risk import EngineHalts, KillSwitch, RiskEngine, request_peak_reset
 from ..secrets_store import SecretsStore
 
 SESSION_COOKIE = "bm_session"
@@ -209,8 +209,11 @@ def create_app(db_path: str | None = None, password_hash: str | None = None, sec
             limiter.fail(ip)
             raise HTTPException(403, "password required to release kill switch")
         kill.release()
-        RiskEngine(settings.risk, kill, conn).log("all", "warning", "kill_switch", "released by owner (dashboard)")
-        return {"kill_switch": False}
+        released = EngineHalts(kill.path.parent).release()
+        request_peak_reset(kill.path.parent)  # new high-water mark, else a drawdown halt re-triggers at once
+        RiskEngine(settings.risk, kill, conn).log(
+            "all", "warning", "kill_switch", f"released by owner (dashboard); halts cleared: {released or 'none'}")
+        return {"kill_switch": False, "halts_released": released}
 
     @app.get("/api/settings/alpaca")
     def alpaca_status(_: dict = Depends(require)):
@@ -282,6 +285,8 @@ def build_summary(conn, settings, kill: KillSwitch) -> dict:
             "max_drawdown": _clean(max_drawdown(eq)) if len(eq) else None,
             "trades": {k: _clean(v) for k, v in ts.items()},
             "benchmark": settings.engines.get(name).benchmark if name in settings.engines else "",
+            "shadow": bool(settings.engines.get(name).shadow) if name in settings.engines else False,
+            "halt": EngineHalts(kill.path.parent).active(name, datetime.now(timezone.utc)),
             "recent_fills": ledger.fills(name, limit=20),
         })
     models = [dict(r) for r in conn.execute("SELECT family, version, role, metrics, ts FROM models WHERE role != 'retired'")]
@@ -294,10 +299,11 @@ def build_summary(conn, settings, kill: KillSwitch) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "kill_switch": {"engaged": kill.engaged(), "reason": kill.reason()},
         "risk_limits": settings.risk.__dict__,
-        "combined": {
-            "equity": sum(e["equity"] for e in engines),
-            "initial": sum(e["initial_capital"] for e in engines),
+        "combined": {  # competition books only; shadow/challenger books excluded
+            "equity": sum(e["equity"] for e in engines if not e["shadow"]),
+            "initial": sum(e["initial_capital"] for e in engines if not e["shadow"]),
         },
+        "halts": EngineHalts(kill.path.parent).all(datetime.now(timezone.utc)),
         "engines": engines,
         "workers": worker_status(conn, settings.raw.get("schedule", {}).get("heartbeat_timeout_seconds", 300)),
         "risk_events": [dict(r) for r in conn.execute("SELECT * FROM risk_events ORDER BY id DESC LIMIT 30")],

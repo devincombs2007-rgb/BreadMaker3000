@@ -9,6 +9,7 @@
 # It does NOT open any firewall port. The dashboard password and Alpaca PAPER keys are
 # entered later in the dashboard itself.
 set -euo pipefail
+set +x  # never trace: this script runs inside the credential-handling bootstrap
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
@@ -39,6 +40,10 @@ if [ ! -f .env ]; then
     echo "FREQTRADE__API_SERVER__WS_TOKEN='$(openssl rand -hex 24)'"
     echo "DASHBOARD_SECURE_COOKIES=true"
   } > .env
+fi
+if [ "$MEM_MB" -lt 2000 ] && ! grep -q '^COMPOSE_FILE=' .env; then
+  echo "Small machine (${MEM_MB} MB RAM): enabling low-memory profile docker-compose.micro.yml"
+  echo "COMPOSE_FILE=docker-compose.yml:docker-compose.micro.yml" >> .env
 fi
 
 say "4/7 Preparing folders"

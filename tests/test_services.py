@@ -44,7 +44,9 @@ class FakeFT:
     def show_config(self):
         return {"dry_run": self.dry_run, "trading_mode": "spot", "state": "running"}
 
-    def trades(self, limit=500):
+    def trades(self, limit=500, offset=0):
+        if offset:
+            return {"trades": []}
         return {"trades": [
             {"trade_id": 1, "pair": "BTC/USD", "amount": 1.0, "open_rate": 100.0, "fee_open_cost": 0.4,
              "is_open": False, "close_rate": 105.0, "fee_close_cost": 0.42, "open_timestamp": 1, "close_timestamp": 2,
@@ -88,7 +90,8 @@ def test_sentinel_drawdown_halts(conn, risk):
     ft = FakeFT(equity_rate=100.0)
     st = {"peak": 1100.0}
     r = run_once(ft, conn, risk, st)
-    assert any("drawdown" in b for b in r["breaches"]) and risk.kill_switch.engaged() and ft.stopped >= 1
+    assert any("drawdown" in b for b in r["breaches"]) and r["halted"] and ft.stopped >= 1
+    assert risk.halts.active("freqtrade", datetime.now(timezone.utc))["kind"] == "drawdown"
 
 
 def test_mirror_orders_exit_before_entry(conn):
@@ -153,8 +156,13 @@ def test_dashboard_login_and_kill_switch_flow(client, tmp_settings):
     assert client.post("/api/kill", headers={"X-BM-CSRF": csrf}).json() == {"kill_switch": True}
     assert KillSwitch(tmp_settings.kill_switch_path).engaged()
     assert client.post("/api/kill/release", headers={"X-BM-CSRF": csrf}, data={"password": "bad"}).status_code == 403
-    assert client.post("/api/kill/release", headers={"X-BM-CSRF": csrf}, data={"password": PW}).status_code == 200
+    from breadmaker.risk import EngineHalts
+    EngineHalts(tmp_settings.data_dir).halt("freqtrade", "drawdown", "dd", datetime.now(timezone.utc), None)
+    assert client.get("/api/summary").json()["halts"]["freqtrade"]["kind"] == "drawdown"
+    r = client.post("/api/kill/release", headers={"X-BM-CSRF": csrf}, data={"password": PW})
+    assert r.status_code == 200 and r.json()["halts_released"] == ["freqtrade"]
     assert not KillSwitch(tmp_settings.kill_switch_path).engaged()
+    assert (tmp_settings.data_dir / "PEAK_RESET").exists()
 
 
 def test_login_rate_limited(client):

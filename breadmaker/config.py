@@ -104,6 +104,7 @@ class EngineConfig:
     initial_capital: float
     enabled: bool = True
     benchmark: str = ""
+    shadow: bool = False   # challenger/shadow book: tracked and risk-limited, excluded from the $3,000 competition
 
 
 @dataclass

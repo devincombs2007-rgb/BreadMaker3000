@@ -19,7 +19,7 @@ from breadmaker.costs import US_ETF_ALPACA
 from breadmaker.db import connect
 from breadmaker.ledger import Ledger
 from breadmaker.orchestrator.heartbeat import beat
-from breadmaker.risk import KillSwitch, OrderIntent, PortfolioState, RiskEngine
+from breadmaker.risk import KillSwitch, OrderIntent, PortfolioState, RiskEngine, update_equity_state
 
 from .logic import DEFAULT_UNIVERSE, Params, plan_orders, select_targets
 
@@ -57,18 +57,44 @@ class BreadETFRotation(Strategy):
 
     def _portfolio_state(self, prices: dict[str, float], st: dict) -> PortfolioState:
         s = self.ledger.summary(ENGINE, prices)
-        today = self.get_datetime().date().isoformat()
-        if st.get("day") != today:
-            st["day"], st["day_start"] = today, s["equity"]
-        st["peak"] = max(st.get("peak") or s["equity"], s["equity"])
+        update_equity_state(st, s["equity"], self._now_utc(), self.risk.kill_switch.path.parent)
         return PortfolioState(
             equity=s["equity"], cash=s["cash"], day_start_equity=st["day_start"], peak_equity=st["peak"],
             positions_value={p["symbol"]: p["value"] for p in s["positions"]},
             positions_qty={p["symbol"]: p["qty"] for p in s["positions"]},
         )
 
+    def _now_utc(self):
+        from datetime import timezone
+        return self.get_datetime().astimezone(timezone.utc)
+
+    def _reconcile(self) -> bool:
+        """Ledger must match broker holdings for our universe. Any mismatch halts new entries
+        (the paper account must be used ONLY by this engine). Symbols with open orders are skipped."""
+        try:
+            universe = set(self.parameters["universe"])
+            pending = {o.asset.symbol for o in self.get_orders() if getattr(o, "is_active", lambda: False)()}
+            broker = {p.asset.symbol: float(p.quantity) for p in self.get_positions()
+                      if p.asset.symbol in universe}
+            ledger = {sym: pos.qty for sym, pos in self.ledger.positions(ENGINE).items()}
+            diffs = []
+            for sym in (set(broker) | set(ledger)) - pending:
+                b, l = broker.get(sym, 0.0), ledger.get(sym, 0.0)
+                if abs(b - l) > max(1e-4, 0.001 * max(abs(b), abs(l))):
+                    diffs.append(f"{sym}: broker={b:.6g} ledger={l:.6g}")
+            if diffs:
+                msg = "position mismatch: " + "; ".join(sorted(diffs))
+                self.risk.log(ENGINE, "critical", "reconciliation", msg)
+                self.risk.halts.halt(ENGINE, "reconciliation", msg, self._now_utc(), None)
+                return False
+            return True
+        except Exception as exc:  # cannot verify -> do not open new risk
+            self.risk.log(ENGINE, "critical", "reconciliation", f"reconciliation failed: {exc!r}")
+            return False
+
     def on_trading_iteration(self):
         beat(self.conn, "lumibot", "running")
+        reconciled = self._reconcile()
         universe = self.parameters["universe"]
         closes = {}
         for sym in universe:
@@ -92,11 +118,13 @@ class BreadETFRotation(Strategy):
         st = self._load_state()
         state = self._portfolio_state(prices, st)
         self.ledger.snapshot(ENGINE, state.equity, state.cash, ts=self.get_datetime().isoformat())
-        breaches = self.risk.check_portfolio(ENGINE, state)
+        self.risk.check_portfolio(ENGINE, state, self._now_utc())
+        blocked = (not reconciled or self.risk.kill_switch.engaged()
+                   or self.risk.halts.active(ENGINE, self._now_utc()) is not None)
 
         rebalance_day = self.get_datetime().weekday() == self.parameters["rebalance_weekday"]
         targets = select_targets(closes_df, state.equity, self.limits.max_position_pct,
-                                 self.limits.max_risk_per_trade_pct, self.p) if rebalance_day and not breaches else None
+                                 self.limits.max_risk_per_trade_pct, self.p) if rebalance_day and not blocked else None
         holdings = dict(state.positions_qty)
         if targets is None:
             # Not a rebalance day (or halted): only enforce stops.
@@ -107,7 +135,7 @@ class BreadETFRotation(Strategy):
             for t in targets:
                 st["stops"].setdefault(t.symbol, t.stop_price)
 
-        now = self.get_datetime()
+        now = self._now_utc()
         for sym, qty in sells:
             self._submit(sym, "sell", qty, prices[sym], None, now, state)
         stop_map = {t.symbol: t.stop_price for t in (targets or [])}
@@ -143,13 +171,33 @@ class BreadETFRotation(Strategy):
         order.custom_params = {"bm_coid": coid}
         self.submit_order(order)
 
-    def on_filled_order(self, position, order, price, quantity, multiplier):
-        coid = (getattr(order, "custom_params", None) or {}).get("bm_coid") or f"bm-lb-ext-{order.identifier}"
-        notional = float(price) * float(quantity)
+    def _book_fills(self, order, cb_price, cb_quantity, final: bool):
+        """Book the *difference* between what the broker reports filled for this order and what the
+        ledger already holds. Correct whether callbacks report per-chunk or cumulative quantities."""
+        base = (getattr(order, "custom_params", None) or {}).get("bm_coid") or f"bm-lb-ext-{order.identifier}"
+        side = order.side.lower() if isinstance(order.side, str) else str(order.side.value).lower()
+        tx = list(getattr(order, "transactions", None) or [])
+        if tx and all(t.price is not None for t in tx):
+            cum_q = sum(float(t.quantity) for t in tx)
+            cum_n = sum(float(t.quantity) * float(t.price) for t in tx)
+        elif final and self.ledger.fill_count_for_order(ENGINE, base) == 0:
+            cum_q, cum_n = float(cb_quantity), float(cb_quantity) * float(cb_price)
+        else:
+            return
+        done_q, done_n = self.ledger.recorded_for_order(ENGINE, base)
+        dq, dn = cum_q - done_q, cum_n - done_n
+        if dq <= 1e-12:
+            return
+        n = self.ledger.fill_count_for_order(ENGINE, base)
         try:
-            self.ledger.record_fill(ENGINE, order.asset.symbol, order.side.lower() if isinstance(order.side, str) else str(order.side.value).lower(),
-                                    float(quantity), float(price), US_ETF_ALPACA.fee(notional), coid,
-                                    ts=self.get_datetime().isoformat(),
+            self.ledger.record_fill(ENGINE, order.asset.symbol, side, dq, dn / dq, US_ETF_ALPACA.fee(dn),
+                                    f"{base}#{n + 1}", ts=self._now_utc().isoformat(),
                                     source="backtest" if self.is_backtesting else "paper")
-        except Exception as exc:  # never crash the trading loop on accounting; log loudly
-            self.risk.log(ENGINE, "critical", "ledger_error", f"{coid}: {exc}")
+        except Exception as exc:  # never crash the loop; reconciliation will halt entries on divergence
+            self.risk.log(ENGINE, "critical", "ledger_error", f"{base}: {exc}")
+
+    def on_partially_filled_order(self, position, order, price, quantity, multiplier):
+        self._book_fills(order, price, quantity, final=False)
+
+    def on_filled_order(self, position, order, price, quantity, multiplier):
+        self._book_fills(order, price, quantity, final=True)

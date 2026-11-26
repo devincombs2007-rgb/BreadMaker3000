@@ -27,6 +27,11 @@ engines:
     asset_class: multi_asset_research
     initial_capital: 1000
     benchmark: SPY buy-and-hold
+  freqai_shadow:                 # FreqAI challenger (optional profile); separate shadow book
+    asset_class: crypto_spot
+    initial_capital: 1000
+    benchmark: BreadTrendV1 (champion) and BTC/USD buy-and-hold
+    shadow: true
 
 schedule:
   heartbeat_timeout_seconds: 300

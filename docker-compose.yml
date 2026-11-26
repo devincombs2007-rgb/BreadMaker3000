@@ -26,10 +26,11 @@ services:
       trade --config /freqtrade/user_data/config.json --strategy BreadTrendV1
       --logfile /freqtrade/user_data/logs/freqtrade.log
     environment:
-      BREADMAKER_KILL_SWITCH: /freqtrade/user_data/shared/KILL_SWITCH
+      BREADMAKER_SHARED_DIR: /freqtrade/user_data/shared
+      BREADMAKER_ENGINE: freqtrade
     volumes:
       - ./engines/freqtrade/user_data:/freqtrade/user_data
-      - bm-data:/freqtrade/user_data/shared:ro     # kill switch visible, cannot be removed by the bot
+      - bm-data:/freqtrade/user_data/shared:ro     # risk state visible, cannot be altered by the bot
     ports:
       - "127.0.0.1:8080:8080"                      # FreqUI (private; reach via Tailscale)
     healthcheck:
@@ -50,7 +51,8 @@ services:
       --strategy BreadFreqAIV1 --freqaimodel LightGBMRegressor
       --logfile /freqtrade/user_data/logs/freqai.log
     environment:
-      BREADMAKER_KILL_SWITCH: /freqtrade/user_data/shared/KILL_SWITCH
+      BREADMAKER_SHARED_DIR: /freqtrade/user_data/shared
+      BREADMAKER_ENGINE: freqai_shadow
     volumes:
       - ./engines/freqtrade/user_data:/freqtrade/user_data
       - bm-data:/freqtrade/user_data/shared:ro
@@ -65,7 +67,8 @@ services:
     image: breadmaker/core:0.1.0
     command: ["breadmaker", "supervisor"]
     environment:
-      FREQTRADE_API_URL: http://freqtrade:8080
+      # The freqai instance is optional; while it is not running its sentinel reports "down".
+      FREQTRADE_INSTANCES: freqtrade=http://freqtrade:8080,freqai_shadow=http://freqai:8081
       FREQTRADE_API_USER: breadmaker
     volumes: ["bm-data:/data"]
     depends_on: [freqtrade]

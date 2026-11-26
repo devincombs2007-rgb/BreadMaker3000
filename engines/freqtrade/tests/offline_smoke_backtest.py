@@ -47,7 +47,8 @@ def main() -> int:
     (ud / "data" / "kraken").mkdir(parents=True)
     (ud / "strategies").mkdir()
     src = repo / "engines" / "freqtrade" / "user_data"
-    (ud / "strategies" / f"{STRATEGY}.py").write_text((src / "strategies" / f"{STRATEGY}.py").read_text())
+    for f in (f"{STRATEGY}.py", "bread_risk_gate.py"):
+        (ud / "strategies" / f).write_text((src / "strategies" / f).read_text())
     for i, p in enumerate(PAIRS):
         raw = synthetic_ohlcv(n=3000, seed=11 + i, s0=100 * (i + 1))
         df = raw.reset_index(names="date")

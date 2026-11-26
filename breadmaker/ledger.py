@@ -90,6 +90,19 @@ class Ledger:
         )
         return True
 
+    def recorded_for_order(self, engine: str, order_id: str) -> tuple[float, float]:
+        """(qty, notional) already booked for fills of one broker order (client ids '<order_id>#n')."""
+        r = self.conn.execute(
+            "SELECT COALESCE(SUM(qty),0), COALESCE(SUM(qty*price),0), COUNT(*) FROM fills "
+            "WHERE engine=? AND (client_order_id=? OR client_order_id LIKE ?)",
+            (engine, order_id, order_id + "#%")).fetchone()
+        return float(r[0]), float(r[1])
+
+    def fill_count_for_order(self, engine: str, order_id: str) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM fills WHERE engine=? AND (client_order_id=? OR client_order_id LIKE ?)",
+            (engine, order_id, order_id + "#%")).fetchone()[0]
+
     def fills(self, engine: str | None = None, limit: int = 1000) -> list[dict]:
         q = "SELECT * FROM fills" + (" WHERE engine=?" if engine else "") + " ORDER BY ts DESC, id DESC LIMIT ?"
         args = (engine, limit) if engine else (limit,)
