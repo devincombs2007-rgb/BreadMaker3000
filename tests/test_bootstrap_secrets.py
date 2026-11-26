@@ -43,8 +43,12 @@ def test_bootstrap_never_leaks_credentials(tmp_path, traced):
     calls = tmp_path / "argv.log"
     seen = tmp_path / "seen.log"
     # Stubs record their argv (what `ps` would expose).
-    for name in ["apt-get", "chown", "curl", "sudo-unused"]:
+    for name in ["apt-get", "chown", "curl"]:
         _shim(bin_, name, f'echo "{name} $*" >> "{calls}"\n')
+    # Non-root CI runners make tailscale.sh use sudo, which would reset PATH to the real binaries.
+    _shim(bin_, "sudo", f'echo "sudo $*" >> "{calls}"; exec "$@"\n')
+    # Always exercise the non-root (sudo) path, whoever runs the tests.
+    _shim(bin_, "id", 'if [ "$1" = "-u" ]; then echo 1000; else exec /usr/bin/id "$@"; fi\n')
     _shim(bin_, "tee", f'echo "tee $*" >> "{calls}"; cat >/dev/null\n')
     # git: record argv + whether the auth header arrived via environment; build a fake checkout
     # containing the REAL deploy/tailscale.sh and a stub install.sh.
@@ -88,6 +92,7 @@ def test_bootstrap_never_leaks_credentials(tmp_path, traced):
         assert FAKE_GH not in text, f"github token leaked in {where}"
     assert list(secrets_parent.iterdir()) == [], "secret files not cleaned up"
     assert 'TS_AUTHKEY="removed-after-first-run"' in exposed["script_after"]
+    assert "sudo tailscale up" in exposed["argv"]  # the non-root path was exercised
 
 
 def test_cleanup_runs_even_on_failure(tmp_path):
