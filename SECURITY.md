@@ -15,6 +15,20 @@
 
 ## Secrets
 
+### Installation credentials (cloud-init) - fixed 2026-11-26
+An earlier bootstrap used `set -euxo pipefail`; bash tracing wrote the Tailscale auth key (and the
+optional GitHub token) into `/var/log/cloud-init-output.log`, and the token appeared in git's
+process arguments. **If you pasted a real key into the old version, revoke it** (Tailscale admin →
+Keys; GitHub → Settings → Tokens). The bootstrap now: never traces; moves secrets into 0600 files
+in a RAM-backed directory and unsets the variables; authenticates git through environment-only
+config; passes the Tailscale key as `--auth-key=file:`; shreds the files and blanks the script's
+credentials on exit (also on failure). `tests/test_bootstrap_secrets.py` executes the real
+bootstrap (also under `bash -x`) with stub binaries and asserts the credentials never appear in
+logs, argv, output, or files left on disk. Residual: the cloud provider keeps the original user-data
+in instance metadata - use **one-off** Tailscale keys and **short-lived read-only** GitHub tokens.
+
+### Runtime secrets
+
 - `.env` (internal random secrets) is generated on the server and git-ignored.
 - Dashboard password (scrypt) and Alpaca paper keys live in `bm-data:/data/secrets` (dir `0700`,
   files `0600`), entered through the authenticated dashboard. The API never returns keys.
@@ -47,5 +61,6 @@ Owner: if anything looks wrong, tap **Emergency stop all engines** on the dashbo
 
 - Password reset requires server access (delete `/data/secrets/dashboard_password_hash`).
 - Images are pinned by tag, not digest (planned).
-- The Tailscale auth key pasted into cloud-init stays in Oracle instance metadata; use a
+- The Tailscale auth key pasted into cloud-init stays in the provider's instance metadata; use a
   **one-off** key so it is useless after first use.
+- Risk-enforcement audit and residual risks: [RISK_AUDIT.md](RISK_AUDIT.md).

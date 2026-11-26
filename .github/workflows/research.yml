@@ -16,6 +16,7 @@ on:
       - "engines/freqtrade/user_data/strategies/**"
       - "engines/lumibot/bread_lumibot/logic.py"
       - ".github/workflows/research.yml"
+      - "requirements/research.lock"
 
 permissions:
   contents: read
@@ -33,7 +34,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - name: Install
-        run: pip install -r requirements/core.lock "ccxt==4.5.94" "yfinance==1.8.0" && pip install --no-deps -e .
+        run: pip install -r requirements/research.lock && pip install --no-deps -e .
       - name: Download real historical data (public endpoints, no keys)
         run: python -m breadmaker.research.data_sources --out research_data
       - uses: actions/upload-artifact@v4
@@ -49,7 +50,7 @@ jobs:
         with: {python-version: "3.12"}
       - uses: actions/download-artifact@v4
         with: {name: research-data, path: research_data}
-      - run: pip install -r requirements/core.lock && pip install --no-deps -e .
+      - run: pip install -r requirements/research.lock && pip install --no-deps -e .
       - name: Research run (ETF rotation as deployed + crypto baseline lab)
         run: python -m breadmaker.research.run_real --data research_data --out research_results
       - run: cat research_results/report.md >> "$GITHUB_STEP_SUMMARY"

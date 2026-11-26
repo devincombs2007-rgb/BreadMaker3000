@@ -31,7 +31,9 @@ Everything runs as **simulation**. You never enter a password or key into chat.
 5. **Image and shape** → **Edit**:
    - **Change image** → **Ubuntu** → **Canonical Ubuntu 24.04** → **Select image**.
    - **Change shape** → **Ampere** → **VM.Standard.A1.Flex** → OCPUs **4**, Memory **24 GB** → **Select shape**.
-     (If it says *out of capacity*: try 2 OCPU / 12 GB, or another *Availability domain*, or retry later.)
+     (If it says *out of capacity*: tap **Change shape** → **Specialty and previous generation** →
+     **VM.Standard.E2.1.Micro** instead. It is also free; the server detects the small size and
+     switches to a low-memory setup automatically. More options: HOSTING.md.)
 6. **Add SSH keys** → choose **No SSH keys**.
 7. **Boot volume** → turn on **Specify a custom boot volume size** → **100** GB.
 8. Tap **Show advanced options** → **Management** → **Paste cloud-init script** → paste.
