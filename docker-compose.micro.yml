@@ -1,0 +1,20 @@
+# Low-memory override for ~1 GB free VMs (Oracle VM.Standard.E2.1.Micro, Google Cloud e2-micro).
+# install.sh enables it automatically when RAM < 2 GB by writing to .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.micro.yml
+# Measured idle RSS in sandbox (amd64): core 73 MiB, dashboard 77 MiB, freqtrade 207 MiB at start-up.
+# Active LumiBot memory is NOT yet measured; 4 GB swap is created by install.sh as headroom.
+services:
+  freqtrade:
+    mem_limit: 600m
+    cpus: 0.9
+    healthcheck:
+      start_period: 600s          # 1/8-OCPU burstable CPUs start slowly
+  core:
+    mem_limit: 200m
+    cpus: 0.3
+  dashboard:
+    mem_limit: 150m
+    cpus: 0.3
+  lumibot:
+    mem_limit: 600m
+    cpus: 0.5

@@ -1,0 +1,74 @@
+name: research
+
+# Real-data research and backtesting on GitHub-hosted runners (no server needed).
+# Budget: ~15-25 runner-minutes per run, weekly => well inside the free allowance
+# (public repos: free; private repos: 2,000 min/month on GitHub Free).
+# Results are uploaded as an artifact and written to the run summary. SIMULATION ONLY.
+
+on:
+  schedule:
+    - cron: "17 6 * * 0"          # Sundays 06:17 UTC
+  workflow_dispatch:
+  push:
+    paths:
+      - "breadmaker/research/**"
+      - "engines/freqtrade/research_backtest.py"
+      - "engines/freqtrade/user_data/strategies/**"
+      - "engines/lumibot/bread_lumibot/logic.py"
+      - ".github/workflows/research.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: research-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  data:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install
+        run: pip install -r requirements/core.lock "ccxt==4.5.94" "yfinance==1.8.0" && pip install --no-deps -e .
+      - name: Download real historical data (public endpoints, no keys)
+        run: python -m breadmaker.research.data_sources --out research_data
+      - uses: actions/upload-artifact@v4
+        with: {name: research-data, path: research_data, retention-days: 14}
+
+  etf-and-crypto-lab:
+    needs: data
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - uses: actions/download-artifact@v4
+        with: {name: research-data, path: research_data}
+      - run: pip install -r requirements/core.lock && pip install --no-deps -e .
+      - name: Research run (ETF rotation as deployed + crypto baseline lab)
+        run: python -m breadmaker.research.run_real --data research_data --out research_results
+      - run: cat research_results/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with: {name: research-results, path: research_results, retention-days: 90}
+
+  freqtrade-real-backtest:
+    needs: data
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - uses: actions/download-artifact@v4
+        with: {name: research-data, path: research_data}
+      - run: pip install "freqtrade==2026.10" pyyaml
+      - name: BreadTrendV1 in the real Freqtrade engine on real 1h candles (1x and 2x costs)
+        run: python engines/freqtrade/research_backtest.py --data research_data/crypto --out research_results
+      - run: cat research_results/freqtrade_report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with: {name: freqtrade-research-results, path: research_results, retention-days: 90}
