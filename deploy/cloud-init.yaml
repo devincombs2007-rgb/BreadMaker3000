@@ -1,0 +1,31 @@
+#cloud-config
+# BreadMaker3000 - paste this whole file into Oracle Cloud:
+#   Create instance > Show advanced options > Management > "Paste cloud-init script".
+# Fill in the TWO lines marked EDIT below first. Everything else is automatic.
+# The server installs itself (~15 minutes) and appears in your Tailscale app as "breadmaker".
+write_files:
+  - path: /root/breadmaker-bootstrap.sh
+    permissions: "0700"
+    content: |
+      #!/usr/bin/env bash
+      set -euxo pipefail
+      # ---------------------------------------------------------------- EDIT ↓
+      TS_AUTHKEY="PASTE-TAILSCALE-AUTH-KEY-HERE"   # one-off key from login.tailscale.com > Settings > Keys
+      GH_TOKEN=""                                  # only if the GitHub repo is PRIVATE: read-only token
+      # ---------------------------------------------------------------- EDIT ↑
+      REPO="github.com/devincombs2007-rgb/BreadMaker3000.git"
+      BRANCH="main"
+      exec > /var/log/breadmaker-bootstrap.log 2>&1
+      apt-get update -y
+      DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates
+      if [ -n "$GH_TOKEN" ]; then URL="https://x-access-token:${GH_TOKEN}@${REPO}"; else URL="https://${REPO}"; fi
+      if [ ! -d /opt/breadmaker/.git ]; then git clone --branch "$BRANCH" "$URL" /opt/breadmaker; fi
+      git -C /opt/breadmaker remote set-url origin "https://${REPO}"   # do not keep the token on disk
+      chown -R ubuntu:ubuntu /opt/breadmaker
+      cd /opt/breadmaker
+      bash deploy/install.sh
+      TS_AUTHKEY="$TS_AUTHKEY" bash deploy/tailscale.sh
+      sed -i 's/^\(\s*TS_AUTHKEY=\).*/\1"used-and-removed"/; s/^\(\s*GH_TOKEN=\).*/\1""/' /root/breadmaker-bootstrap.sh
+      echo "BREADMAKER BOOTSTRAP COMPLETE"
+runcmd:
+  - [bash, /root/breadmaker-bootstrap.sh]

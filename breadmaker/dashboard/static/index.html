@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#b8691c">
+<title>BreadMaker3000</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1c1a;--mute:#6b6860;--accent:#b8691c;--line:#e4e1da;--pos:#1e7d4f;--neg:#c0392b;--warn:#b7791f}
+@media (prefers-color-scheme:dark){:root{--bg:#141311;--card:#1f1d1a;--ink:#f0ede6;--mute:#a09b90;--accent:#e08a3a;--line:#34312c;--pos:#4cc38a;--neg:#ff6b5b;--warn:#f0b44c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 -apple-system,system-ui,sans-serif;padding:0 16px calc(24px + env(safe-area-inset-bottom))}
+header{position:sticky;top:0;background:var(--bg);padding:calc(10px + env(safe-area-inset-top)) 0 10px;z-index:2}
+.sim{background:var(--warn);color:#000;font-weight:700;font-size:12px;text-align:center;border-radius:8px;padding:6px;letter-spacing:.04em}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+h1{font-size:20px;margin:10px 0 0}h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);margin:22px 0 8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px}
+.big{font-size:30px;font-weight:700;font-variant-numeric:tabular-nums}
+.num{font-variant-numeric:tabular-nums}.pos{color:var(--pos)}.neg{color:var(--neg)}.mute{color:var(--mute);font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 12px;margin-top:10px}
+.grid div{display:flex;justify-content:space-between;font-size:13px}
+.pill{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--line)}
+.ok{color:var(--pos)}.bad{color:var(--neg)}.stale{color:var(--warn)}
+button{font-size:16px;padding:12px 14px;border-radius:10px;border:0;font-weight:600;width:100%}
+.stop{background:var(--neg);color:#fff}.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:5px 2px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--mute);font-weight:500}
+td.r,th.r{text-align:right}svg{width:100%;height:60px;display:block;margin-top:8px}
+.inp{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);margin-bottom:8px;font-size:16px;background:var(--bg);color:var(--ink)}
+.ev{font-size:12px;border-bottom:1px solid var(--line);padding:6px 0;word-break:break-word}
+</style></head><body>
+<header>
+  <div class="sim">SIMULATED · PAPER / DRY-RUN ONLY · NOT REAL MONEY</div>
+  <div class="row"><h1>🍞 BreadMaker3000</h1><span class="mute" id="upd"></span></div>
+</header>
+
+<div class="card" id="killcard"></div>
+<div class="card"><div class="mute">Combined virtual portfolio</div><div class="big num" id="combined">–</div><div id="combinedsub" class="mute"></div></div>
+
+<h2>Engines</h2><div id="engines"></div>
+<h2>Workers &amp; system</h2><div class="card" id="workers"></div>
+<h2>Risk events</h2><div class="card" id="events"></div>
+<h2>Models &amp; strategy rankings</h2><div class="card" id="models"></div>
+<h2>Settings</h2><div class="card" id="alpaca"></div>
+<form method="post" action="/logout"><button class="ghost" type="submit">Sign out</button></form>
+
+<script>
+const CSRF="__CSRF__";
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const usd=v=>v==null?"–":(v<0?"-$":"$")+Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const pct=v=>v==null?"–":(v>0?"+":"")+(v*100).toFixed(2)+"%";
+const cls=v=>v==null?"":v<0?"neg":v>0?"pos":"";
+const f2=v=>v==null?"–":Number(v).toFixed(2);
+function spark(curve){
+  if(!curve||curve.length<2)return '<div class="mute">Equity curve appears after a few snapshots.</div>';
+  const ys=curve.map(p=>p[1]),mn=Math.min(...ys),mx=Math.max(...ys),r=(mx-mn)||1;
+  const pts=ys.map((y,i)=>`${(i/(ys.length-1)*100).toFixed(2)},${(58-(y-mn)/r*54).toFixed(2)}`).join(" ");
+  const c=ys[ys.length-1]>=ys[0]?"var(--pos)":"var(--neg)";
+  return `<svg viewBox="0 0 100 60" preserveAspectRatio="none"><polyline fill="none" stroke="${c}" stroke-width="1.5" vector-effect="non-scaling-stroke" points="${pts}"/></svg>`;
+}
+function engineCard(e){
+  const r=e.returns||{},t=e.trades||{};
+  const pos=(e.positions||[]).map(p=>`<tr><td>${esc(p.symbol)}</td><td class="r num">${Number(p.qty).toPrecision(4)}</td><td class="r num">${usd(p.value)}</td><td class="r num ${cls(p.unrealized)}">${usd(p.unrealized)}</td></tr>`).join("");
+  const fills=(e.recent_fills||[]).slice(0,8).map(f=>`<tr><td>${esc((f.ts||"").slice(5,16))}</td><td>${esc(f.side)}</td><td>${esc(f.symbol)}</td><td class="r num">${usd(f.qty*f.price)}</td></tr>`).join("");
+  return `<div class="card">
+   <div class="row"><b>${esc(e.engine)}</b><span class="pill">${esc(e.asset_class||"")}</span></div>
+   <div class="row"><span class="big num">${usd(e.equity)}</span><span class="num ${cls(e.total_pnl)}">${usd(e.total_pnl)} (${pct(e.total_return)})</span></div>
+   ${e.equity_source==="cost_basis"?'<div class="mute">Not yet marked to market (no snapshot).</div>':""}
+   ${spark(e.equity_curve)}
+   <div class="grid">
+    <div><span>Day</span><span class="num ${cls(r.day)}">${pct(r.day)}</span></div><div><span>Week</span><span class="num ${cls(r.week)}">${pct(r.week)}</span></div>
+    <div><span>Month</span><span class="num ${cls(r.month)}">${pct(r.month)}</span></div><div><span>Max DD</span><span class="num neg">${pct(e.max_drawdown)}</span></div>
+    <div><span>Sharpe</span><span class="num">${f2(e.sharpe)}</span></div><div><span>Sortino</span><span class="num">${f2(e.sortino)}</span></div>
+    <div><span>Win rate</span><span class="num">${t.win_rate==null?"–":(t.win_rate*100).toFixed(0)+"%"}</span></div><div><span>Profit factor</span><span class="num">${f2(t.profit_factor)}</span></div>
+    <div><span>Trades</span><span class="num">${t.n_trades??0}</span></div><div><span>Fees paid</span><span class="num">${usd(e.fees_paid)}</span></div>
+    <div><span>Cash</span><span class="num">${usd(e.cash)}</span></div><div><span>Realized</span><span class="num ${cls(e.realized_pnl_net_of_fees)}">${usd(e.realized_pnl_net_of_fees)}</span></div>
+   </div>
+   <div class="mute" style="margin-top:8px">Benchmark: ${esc(e.benchmark)} · Sharpe/Sortino need &gt;30 snapshots</div>
+   ${pos?`<h2>Positions</h2><table><tr><th>Symbol</th><th class="r">Qty</th><th class="r">Value</th><th class="r">Unreal.</th></tr>${pos}</table>`:'<div class="mute" style="margin-top:8px">No open positions.</div>'}
+   ${fills?`<h2>Recent fills</h2><table>${fills}</table>`:""}
+  </div>`;
+}
+async function act(path,body){
+  const r=await fetch(path,{method:"POST",headers:{"X-BM-CSRF":CSRF},body});
+  if(!r.ok)alert("Failed: "+r.status); load();
+}
+function killCard(k,limits){
+  if(k.engaged){
+    $("killcard").innerHTML=`<div class="row"><b class="bad">⛔ KILL SWITCH ENGAGED</b></div><div class="mute">${esc(k.reason)}</div>
+     <div class="mute" style="margin:8px 0">New entries are blocked on every engine. Exits still work.</div>
+     <form id="rel"><input type="password" name="password" placeholder="Password to release" style="width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);margin-bottom:8px;font-size:16px;background:var(--bg);color:var(--ink)" required><button class="ghost">Release kill switch</button></form>`;
+    $("rel").onsubmit=e=>{e.preventDefault();act("/api/kill/release",new FormData(e.target))};
+  }else{
+    $("killcard").innerHTML=`<div class="row"><b class="ok">● Risk engine active</b><span class="mute">DD halt ${pct(-limits.max_drawdown_halt_pct)} · day ${pct(-limits.daily_loss_halt_pct)}</span></div>
+     <button class="stop" style="margin-top:10px" id="kbtn">Emergency stop all engines</button>`;
+    $("kbtn").onclick=()=>{if(confirm("Stop all new trades on every engine?"))act("/api/kill")};
+  }
+}
+async function load(){
+  const r=await fetch("/api/summary");
+  if(r.status===401){location="/login";return}
+  const d=await r.json();
+  $("upd").textContent="Updated "+new Date(d.generated_at).toLocaleTimeString();
+  killCard(d.kill_switch,d.risk_limits);
+  const c=d.combined,pnl=c.equity-c.initial;
+  $("combined").textContent=usd(c.equity);
+  $("combinedsub").innerHTML=`<span class="${cls(pnl)}">${usd(pnl)} (${pct(c.initial?pnl/c.initial:0)})</span> on ${usd(c.initial)} virtual capital`;
+  $("engines").innerHTML=d.engines.map(engineCard).join("")||'<div class="card mute">No engines registered yet.</div>';
+  $("workers").innerHTML=(d.workers.map(w=>`<div class="row"><span>${esc(w.worker)}</span><span class="${w.status==="running"?"ok":w.status==="stale"?"stale":"bad"}">${esc(w.status)} · ${w.age_seconds}s</span></div><div class="mute">${esc(w.detail)}</div>`).join("")||'<div class="mute">No heartbeats yet.</div>')
+    +`<div class="row" style="margin-top:8px"><span class="mute">CPU ${d.system.cpu_pct}% · RAM ${d.system.mem_pct}%</span><span class="mute">Up ${(d.system.uptime_s/86400).toFixed(1)}d</span></div>`;
+  $("events").innerHTML=d.risk_events.map(e=>`<div class="ev"><span class="${e.severity==="critical"?"bad":"stale"}">${esc(e.severity)}</span> ${esc(e.ts)} [${esc(e.engine)}] <b>${esc(e.rule)}</b> ${esc(e.detail)}</div>`).join("")||'<div class="mute">No risk events.</div>';
+  const m=d.models.map(x=>`<div class="row"><span>${esc(x.family)} ${esc(x.version)}</span><span class="pill">${esc(x.role)}</span></div>`).join("");
+  const s=d.strategy_rankings.map(x=>`<tr><td>${esc(x.name)}</td><td class="mute">${esc(x.params)}</td><td class="r num">${f2(x.oos_sharpe)}</td></tr>`).join("");
+  $("models").innerHTML=(m||'<div class="mute">No models registered.</div>')+(s?`<h2>Top out-of-sample (research, not live)</h2><table><tr><th>Strategy</th><th>Params</th><th class="r">OOS Sharpe</th></tr>${s}</table>`:"");
+}
+async function loadAlpaca(){
+  const r=await fetch("/api/settings/alpaca"); if(!r.ok)return; const a=await r.json();
+  $("alpaca").innerHTML=`<div class="row"><b>Alpaca paper keys</b><span class="${a.configured?"ok":"stale"}">${a.configured?"Saved "+esc(a.key_hint):"Not set"}</span></div>
+   <div class="mute" style="margin:6px 0 10px">Paper keys only (start with PK). Stored on your server, never shown again.</div>
+   <form id="alp">
+    <input name="key" placeholder="API Key ID (PK...)" autocapitalize="characters" autocomplete="off" required class="inp">
+    <input name="secret" type="password" placeholder="Secret Key" autocomplete="off" required class="inp">
+    <input name="password" type="password" placeholder="Your dashboard password" autocomplete="current-password" required class="inp">
+    <button class="ghost">Save keys</button></form>`;
+  $("alp").onsubmit=async e=>{e.preventDefault();
+    const r=await fetch("/api/settings/alpaca",{method:"POST",headers:{"X-BM-CSRF":CSRF},body:new FormData(e.target)});
+    alert(r.ok?"Saved. The stock engine starts within a minute.":"Not saved: "+((await r.json()).detail||r.status)); loadAlpaca();};
+}
+load();loadAlpaca();setInterval(load,30000);
+</script>
+</body></html>

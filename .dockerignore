@@ -1,0 +1,11 @@
+.git
+.env
+data
+**/__pycache__
+**/*.sqlite*
+engines/freqtrade/user_data/data
+engines/freqtrade/user_data/models
+engines/freqtrade/user_data/logs
+engines/lean
+tests
+docs

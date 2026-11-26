@@ -1,0 +1,36 @@
+# BreadMaker3000 central configuration (non-secret).
+# Secrets live in .env (never committed). See .env.example.
+mode: simulation          # the only supported mode
+
+data_dir: ./data          # overridden by BREADMAKER_DATA_DIR inside Docker
+
+# Independent risk engine limits. These can be tightened, never loosened past
+# hard-coded ceilings in breadmaker/config.py. Strategies and ML cannot change them.
+risk:
+  max_position_pct: 0.10        # max 10% of engine equity in one position
+  max_risk_per_trade_pct: 0.005 # max 0.5% of equity at risk (entry - stop) per trade
+  daily_loss_halt_pct: 0.01     # halt new entries after 1% daily loss
+  max_drawdown_halt_pct: 0.05   # engage kill switch at 5% drawdown from peak
+  max_data_age_seconds: 300     # reject orders priced from data older than this
+
+# Three isolated virtual portfolios ($3,000 simulated total).
+engines:
+  freqtrade:
+    asset_class: crypto_spot
+    initial_capital: 1000
+    benchmark: BTC/USD buy-and-hold
+  lumibot:
+    asset_class: us_equity_etf
+    initial_capital: 1000
+    benchmark: SPY buy-and-hold
+  lean:
+    asset_class: multi_asset_research
+    initial_capital: 1000
+    benchmark: SPY buy-and-hold
+
+schedule:
+  heartbeat_timeout_seconds: 300
+  daily_report_utc: "21:30"
+  weekly_report_weekday: 5      # Saturday
+  retrain_weekday: 6            # Sunday (bounded job)
+  retrain_max_minutes: 30

@@ -1,0 +1,62 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install pinned core deps
+        run: pip install -r requirements/core.lock pytest && pip install --no-deps -e .
+      - name: Unit tests
+        run: pytest -q
+      - name: Safety check (no live trading paths, no secrets)
+        run: breadmaker safety-check
+
+  secret-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: gitleaks (full history)
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 git /repo --no-banner --redact
+
+  freqtrade-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install Freqtrade (pinned) + FreqAI extras
+        run: pip install "freqtrade[freqai]==2026.10" pyyaml
+      - name: Real Freqtrade backtest engine, synthetic data (baseline)
+        run: python engines/freqtrade/tests/offline_smoke_backtest.py .
+      - name: Real Freqtrade backtest engine, synthetic data (FreqAI LightGBM)
+        run: python engines/freqtrade/tests/offline_smoke_backtest.py . --freqai
+
+  lumibot-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements/lumibot.lock
+      - name: Real LumiBot backtest engine, synthetic data
+        run: BREADMAKER_DATA_DIR=$RUNNER_TEMP/lb python engines/lumibot/tests/offline_smoke_backtest.py .
+
+  docker-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env && docker compose config -q
+      - run: docker build -f docker/core.Dockerfile -t breadmaker/core:ci .
+      - run: docker build -f docker/lumibot.Dockerfile -t breadmaker/lumibot:ci .
