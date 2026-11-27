@@ -12,7 +12,7 @@ is a profitability claim. Every number below was produced by GitHub Actions run
 |---|---|---|---|
 | BTC/ETH/SOL daily | Binance.US (binance.com did not serve the US runner; fallback worked) | BTC/ETH 2019-09 → 2026-11, SOL 2020-09 → | quote currency per venue; costs still modelled on Kraken |
 | BTC/ETH/SOL hourly | Binance.US | 2023-01-01 → 2026-11-26 (20,134 bars each) | |
-| 10 ETFs daily (SPY QQQ IWM EFA EEM TLT IEF GLD VNQ DBC) | Yahoo (split/dividend adjusted) | 2007-01-03 → 2026-11-25 (5,007 bars) | 6 sets flagged "high/low inconsistent"; the validator then had no tolerance or magnitude, so it could not tell adjustment rounding from real defects - **fixed to report counts and magnitude; re-check on next run**. Survivorship bias: today's tickers only. |
+| 10 ETFs daily (SPY QQQ IWM EFA EEM TLT IEF GLD VNQ DBC) | Yahoo (split/dividend adjusted) | 2007-01-03 → 2026-11-25 (5,007 bars) | First run flagged 6 sets "high/low inconsistent" (validator had no tolerance). Re-run [45914339683](https://github.com/devincombs2007-rgb/BreadMaker3000/actions/runs/45914339683) with a 1e-6 relative tolerance: **all 16 datasets clean** → the flags were adjustment rounding, not defects. Survivorship bias: today's tickers only. |
 
 ## 1. Freqtrade `BreadTrendV1` (the deployed crypto baseline) - **REJECTED**
 

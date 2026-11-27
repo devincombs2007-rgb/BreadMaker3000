@@ -30,7 +30,9 @@ mobile dashboard.
 
 - **Owner (iPhone) setup:** [OWNER_SETUP.md](OWNER_SETUP.md)
 - Status: [PROGRESS.md](PROGRESS.md) · Tests: [TEST_REPORT.md](TEST_REPORT.md) · Plan: [ROADMAP.md](ROADMAP.md)
-- Design: [ARCHITECTURE.md](ARCHITECTURE.md) · Deploy: [DEPLOYMENT.md](DEPLOYMENT.md) · Security: [SECURITY.md](SECURITY.md)
+- Design: [ARCHITECTURE.md](ARCHITECTURE.md) · Deploy: [DEPLOYMENT.md](DEPLOYMENT.md) · Hosting: [HOSTING.md](HOSTING.md)
+- Security: [SECURITY.md](SECURITY.md) · Risk audit: [RISK_AUDIT.md](RISK_AUDIT.md)
+- **Real-data research:** [RESEARCH_RESULTS.md](RESEARCH_RESULTS.md) - no strategy has passed validation yet
 
 ## Developer quick start
 
@@ -40,4 +42,5 @@ pytest -q                      # core test suite
 breadmaker safety-check        # scans for live-trading paths and secrets
 breadmaker research data.feather --asset crypto   # baseline strategy lab
 ```
-Engine smoke tests (real engines, synthetic data) are in `engines/*/tests/` and run in CI.
+Engine smoke tests (real engines, synthetic data) are in `engines/*/tests/` and run in CI on amd64
+and native arm64. Real-data research runs weekly on GitHub Actions (`.github/workflows/research.yml`).

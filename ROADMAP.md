@@ -13,7 +13,8 @@ Repo structure, architecture, upstream review (versions, licences, arm64), CI, p
 - [x] Independent risk engine, sentinel, kill switch
 - [x] Backtester, cost model, metrics, strategy lab with DSR
 - [x] LEAN cross-check algorithm + data converter
-- [ ] Download real history on Oracle (Freqtrade `download-data`; ETF dailies) and run the lab
+- [x] Real history downloaded + lab run on GitHub Actions (RESEARCH_RESULTS.md): baseline crypto rejected
+- [ ] Redesign crypto baseline for low turnover (4h/1d), re-test through the same gates
 - [ ] First LEAN vs LumiBot equivalence run on identical data
 
 ## Phase 4 - Machine learning (in progress)
@@ -22,6 +23,10 @@ Repo structure, architecture, upstream review (versions, licences, arm64), CI, p
 - [ ] Weekly bounded research job (cron in supervisor) writing to experiment registry
 - [ ] XGBoost/CatBoost pinned + evaluated; ensemble only if it beats single models OOS
 - [ ] Regime classifier (volatility/trend) feeding allocation, evaluated vs baseline
+
+## Hosting (Oracle A1 capacity-blocked)
+- [x] Investigate free hosts (HOSTING.md); low-memory profile
+- [ ] Owner: try Oracle E2.1.Micro, else Google Cloud e2-micro
 
 ## Phase 5 - Operations
 - [x] Mobile dashboard, reports, health, Compose deployment, cloud-init
