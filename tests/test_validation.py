@@ -61,3 +61,18 @@ def test_daily_max_from_hourly():
 def test_render_reports_errors_and_no_fabrication():
     md = render({"generated_at": "x", "weather": {"KNYC": {"n": 0}}, "crypto": {}, "errors": {"weather:KNYC": "HTTP 403"}})
     assert "insufficient" in md and "HTTP 403" in md and "nothing substituted" in md
+
+
+def test_feed_get_retries_then_raises(monkeypatch):
+    import httpx
+    from breadmaker.forecasting import feeds
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        raise httpx.ConnectTimeout("handshake timed out")
+    monkeypatch.setattr(feeds.httpx, "get", boom)
+    import pytest
+    with pytest.raises(httpx.ConnectTimeout):
+        feeds._get("https://example.invalid", {}, retries=2, sleep=lambda s: None)
+    assert len(calls) == 3

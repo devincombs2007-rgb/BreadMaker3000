@@ -1,5 +1,26 @@
 # Test report
 
+## Iteration 3 - Kalshi pivot (2026-11-27)
+
+| Area | Result |
+|---|---|
+| Unit/integration tests | **115 passed** locally (core venv). Kalshi tests use a mock HTTP API serving SYNTHETIC responses |
+| Kalshi gate | `kalshi-run` exits 3 without any network call when access is off (verified); CI asserts committed config has access OFF |
+| Safety scan | PASS; detects planted Kalshi order path and request-signing header (tested) |
+| Real-data forecast validation | GitHub Actions run 45919313472 succeeded: 5/7 weather stations, BTC + ETH; see RESEARCH_RESULTS.md |
+| Workflow files | Validated against GitHub's schema + actionlint (a YAML error in kalshi-paper.yml was found this way and fixed) |
+
+Bugs found and fixed while testing this iteration:
+- token bucket could spin forever on a sub-resolution sleep (float refill 0.99999…);
+- Newton recalibration fit diverged (returned p=1.0) → replaced with L-BFGS on the same objective;
+- evidence records hashed the provenance hash instead of storing it;
+- settlement lookup guessed event tickers instead of using the stored one;
+- workflow YAML scalar containing ': ' made GitHub reject kalshi-paper.yml.
+
+Not tested: any live Kalshi request (access OFF by owner decision); KMIA/KPHL weather data (timeouts).
+
+---
+
 ## Iteration 2 - 2026-11-27
 
 | Area | Result | Evidence |

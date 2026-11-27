@@ -34,7 +34,8 @@ jobs:
       - name: Validate weather and crypto forecasting models (walk-forward, out-of-sample)
         run: breadmaker validate-forecasts --out validation_results
       - if: always()
-        run: test -f validation_results/validation.md && cat validation_results/validation.md >> "$GITHUB_STEP_SUMMARY" || true
+        run: |
+          if [ -f validation_results/validation.md ]; then cat validation_results/validation.md >> "$GITHUB_STEP_SUMMARY"; fi
       - if: always()
         uses: actions/upload-artifact@v4
         with: {name: forecast-validation, path: validation_results/validation.json, retention-days: 90}

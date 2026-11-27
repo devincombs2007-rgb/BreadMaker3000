@@ -1,81 +1,70 @@
-# Research results - real historical data
+# Research results
 
-**Simulated backtests only.** Historical results are not forward performance and nothing here
-is a profitability claim. Every number below was produced by GitHub Actions run
-[45913970684](https://github.com/devincombs2007-rgb/BreadMaker3000/actions/runs/45913970684)
-(2026-11-26, commit `9ee6bcf`) and copied from its log; artifacts `research-results` and
-`freqtrade-research-results` hold the full JSON. Re-run: Actions → research → Run workflow.
+> Previous equity/crypto strategy results (all rejected) are preserved on branch
+> `archive/trading-system-v0.2`.
 
-## Data (downloaded in the run; SHA-256 per file in `manifest.json`)
+## Forecast-model validation on real public data (no Kalshi data)
 
-| Set | Venue | Range | Notes |
-|---|---|---|---|
-| BTC/ETH/SOL daily | Binance.US (binance.com did not serve the US runner; fallback worked) | BTC/ETH 2019-09 → 2026-11, SOL 2020-09 → | quote currency per venue; costs still modelled on Kraken |
-| BTC/ETH/SOL hourly | Binance.US | 2023-01-01 → 2026-11-26 (20,134 bars each) | |
-| 10 ETFs daily (SPY QQQ IWM EFA EEM TLT IEF GLD VNQ DBC) | Yahoo (split/dividend adjusted) | 2007-01-03 → 2026-11-25 (5,007 bars) | First run flagged 6 sets "high/low inconsistent" (validator had no tolerance). Re-run [45914339683](https://github.com/devincombs2007-rgb/BreadMaker3000/actions/runs/45914339683) with a 1e-6 relative tolerance: **all 16 datasets clean** → the flags were adjustment rounding, not defects. Survivorship bias: today's tickers only. |
+The numbers come from GitHub Actions run
+[45919313472](https://github.com/devincombs2007-rgb/BreadMaker3000/actions/runs/45919313472)
+(2026-11-27, commit `0c46f05`), copied from its log. Artifact `forecast-validation` holds the JSON.
+All forecasts are **out-of-sample walk-forward**: each one uses only data available before its target.
 
-## 1. Freqtrade `BreadTrendV1` (the deployed crypto baseline) - **REJECTED**
+**What this does and doesn't show.** It measures whether the probabilities are **accurate and
+calibrated**. It says nothing about profitability on Kalshi: that depends on Kalshi's prices, which
+have not been accessed (access is OFF pending authorization). A calibrated model only makes money if
+the market is mispriced by more than the fees.
 
-Real Freqtrade 2026.10 engine, real 1h candles, BTC/ETH/SOL, 2023-01-10 → 2026-11-26, 10% stakes,
-5% stop. Does **not** include BreadMaker's portfolio halts (which would have stopped it early).
+### Weather: P(NWS CLI daily high ≥ k), 13 thresholds per day around the forecast
 
-| Costs | Trades | Total return | Max DD | Sharpe | Win rate | Profit factor | Buy & hold same coins |
-|---|---|---|---|---|---|---|---|
-| 1x (0.55%/side) | 185 | **−23.8%** | −24.5% | −0.87 | 21.6% | 0.44 | +204.3% |
-| 2x (1.10%/side) | 185 | **−38.1%** | −38.6% | −1.47 | 15.7% | 0.27 | +201.0% |
+The forecast was issued about 1 day ahead (Open-Meteo previous runs). The residual pool comes from
+days ≤ t−2, and the truth is the NWS Daily Climate Report via Iowa Environmental Mesonet.
 
-Reading: frequent 1h EMA-cross entries are whipsawed; ~$180 of estimated fees on a $1,000 book.
-It loses money before and after costs and massively lags buy-and-hold. It remains in dry-run **only
-as an infrastructure test** (order flow, sentinel, halts); it must not be considered a candidate.
+| Station | Days (period) | Predictions | Brier model | Brier Gaussian baseline | Brier raw point forecast | Skill vs Gaussian | Log loss | ECE |
+|---|---|---|---|---|---|---|---|---|
+| KNYC (NYC Central Park) | 996 (2024-03-03 → 2026-11-25) | 12,948 | 0.1293 | 0.1289 | 0.1962 | −0.004 | 0.4053 | 0.0167 |
+| KMDW (Chicago Midway) | 998 | 12,974 | 0.1207 | 0.1208 | 0.1970 | 0.000 | 0.3841 | 0.0074 |
+| KDEN (Denver) | 998 | 12,974 | 0.1277 | 0.1298 | 0.1838 | +0.016 | 0.4091 | 0.0103 |
+| KLAX (Los Angeles) | 996 | 12,948 | 0.1069 | 0.1071 | 0.1660 | +0.002 | 0.3449 | 0.0080 |
+| KAUS (Austin) | 998 | 12,974 | 0.1124 | 0.1128 | 0.1945 | +0.003 | 0.3635 | 0.0085 |
+| KMIA, KPHL | **not obtained** | – | – | – | – | – | – | – |
 
-## 2. Crypto daily baseline lab (signal study, full exposure, Kraken-level costs) - **0 accepted**
+KMIA and KPHL failed with Open-Meteo TLS handshake timeouts on both hosts. Nothing was substituted.
+Bounded retries were added afterwards, and the next run will show whether the failure was transient.
 
-17 parameter sets per coin (all recorded for multiple-testing correction), last 25% held out.
+Findings:
+- **Calibrated:** expected calibration error is 0.7–1.7 percentage points.
+- **Uncertainty matters:** about 34–39% lower Brier than treating the point forecast as certain.
+- **No extra skill over a simple Gaussian** built from the same residual statistics: −0.4% to +1.6%.
+  The empirical-residual method is not better, just equivalent.
+- Thresholds near the forecast are correlated within a day, so the effective sample size is closer
+  to ~1,000 days per station than to 13,000.
 
-| Coin | Accepted | Best OOS Sharpe (why rejected) | Buy & hold OOS Sharpe |
-|---|---|---|---|
-| BTC | 0 / 17 | −0.38 (ts_momentum 180) | −0.82 |
-| ETH | 0 / 17 | 1.05 (SMA 10/100: only 3 trades, DSR 0.82 < 0.95, max DD −28%) | −0.17 |
-| SOL | 0 / 17 | −0.07 (Donchian 55/10, 2 trades) | −1.26 |
+### Crypto: P(price above strike at t+h), strikes at z ∈ {−1.5, −0.75, 0, +0.75, +1.5}σ
 
-In-sample Sharpes of 0.7-1.6 collapsed out of sample - the classic overfitting pattern the gates
-exist to catch.
+Every 6 h since 2024-01, using public hourly OHLCV (venue recorded in the artifact) and past-only
+EWMA volatility.
 
-## 3. ETF rotation (deployed LumiBot logic) 2007 → 2026, split 2018-12-07
-
-Strategy-only, 1x costs (fees + 1 bp half-spread + 3 bp slippage), fills at next open:
-
-| Series | Segment | Total return | CAGR | Sharpe | Max DD |
-|---|---|---|---|---|---|
-| Strategy | full | +41.1% | +1.8% | 0.65 | −6.4% |
-| Strategy | out-of-sample | +19.1% | +2.2% | 0.82 | −3.7% |
-| SPY buy & hold | full | +577.5% | +10.6% | 0.61 | −54.7% |
-| SPY buy & hold | out-of-sample | +206.5% | +15.1% | 0.82 | −33.7% |
-| SPY at the strategy's own exposure | full | +58.7% | +2.5% | 0.68 | −11.2% |
-| SPY at the strategy's own exposure | out-of-sample | +26.1% | +3.0% | 0.85 | −6.5% |
-| Equal-weight universe | full | +293.7% | +7.5% | 0.58 | −39.2% |
-
-| Run (full period) | Total return | Sharpe | Max DD | Avg exposure | Costs paid | Drawdown halt |
+| Asset | Horizon | n | Brier normal | Brier Student-t | ECE normal | ECE Student-t |
 |---|---|---|---|---|---|---|
-| strategy, 1x costs | +41.1% | 0.65 | −6.4% | 21.7% | $33.59 | - |
-| strategy, 5x costs | +25.8% | 0.44 | −8.1% | 21.7% | $158.31 | - |
-| **as deployed (with 1%/5% halts)**, 1x | +17.3% | 0.37 | −5.7% | 14.8% | $21.76 | **2020-02-28** |
+| BTC | 1h | 20,615 | 0.1367 | 0.1362 | 0.0190 | 0.0136 |
+| BTC | 6h | 20,600 | 0.1382 | 0.1378 | 0.0214 | 0.0174 |
+| BTC | 24h | 20,555 | 0.1473 | 0.1481 | 0.0184 | 0.0322 |
+| ETH | 1h | 20,610 | 0.1380 | 0.1377 | 0.0166 | 0.0144 |
+| ETH | 6h | 20,610 | 0.1365 | 0.1360 | 0.0206 | 0.0146 |
+| ETH | 24h | 20,580 | 0.1473 | 0.1478 | 0.0200 | 0.0302 |
 
-Reading:
-- The low drawdown comes from **low exposure (~22%)**, not selection skill: SPY held at the same
-  exposure did slightly better (Sharpe 0.68 vs 0.65; OOS return +26.1% vs +19.1%).
-- Verdict checks: OOS Sharpe positive ✔, beats SPY Sharpe OOS ✘, beats exposure-matched SPY ✘,
-  profitable at 5x costs ✔.
-- **Risk-limit interaction:** with the 5% drawdown halt, the deployed strategy stopped buying on
-  2020-02-28 (COVID crash) and - since research never releases halts - stayed frozen. Live, the owner
-  would have to release it. The 10% cap + 0.5% risk + 5% halt combination keeps the book mostly in
-  cash; that is a deliberate safety choice, but it also caps any possible return.
+Findings:
+- Calibration error is 1.4–3.2 points.
+- Fat (Student-t) tails help at 1–6 h, but the normal model is better calibrated at 24 h.
+- The live model uses Student-t for all horizons; switching to normal beyond ~12 h is a supported
+  follow-up.
+- Basis risk is not captured: Kalshi settles on an index, not one exchange's close.
+- Overlapping windows mean the effective sample is smaller than n.
 
-## Conclusions
+## Kalshi paper trading
 
-1. No strategy tested has credible evidence of an edge. None qualifies for promotion.
-2. The crypto baseline should be redesigned for far lower turnover (daily/4h, fewer, longer trades)
-   before any further evaluation; costs dominate at the 1h horizon.
-3. The ETF rotation is a safe, low-exposure allocation, not an alpha source on this evidence.
-4. The 5% permanent drawdown halt materially changes outcomes; the owner should decide whether that
-   threshold is intended for a $1,000 book (it is not changed by this work).
+**No results.** Kalshi API access is off pending written authorization, and the repository is public
+(see KALSHI.md). No Kalshi prices have been observed, so there are no simulated returns, no
+settlement accuracy and no drawdown to report. Nothing here should be read as evidence of an edge
+on Kalshi.

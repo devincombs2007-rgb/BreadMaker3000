@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -91,8 +92,10 @@ def run(stations: dict, out_dir: Path, crypto_bases=("BTC", "ETH"), weather_star
     end = datetime.now(timezone.utc).date() - timedelta(days=2)
     results = {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "provenance": [],
                "weather": {}, "crypto": {}, "errors": {}}
-    for series, cfg in stations.items():
+    for i, (series, cfg) in enumerate(stations.items()):
         st = cfg["station"]
+        if i:
+            time.sleep(3)  # space out requests to the free Open-Meteo tier
         try:
             std_tz = STANDARD_TZ[cfg["tz"]]
             fc, prov = previous_day1_daily_max(cfg["lat"], cfg["lon"], std_tz, weather_start, end)

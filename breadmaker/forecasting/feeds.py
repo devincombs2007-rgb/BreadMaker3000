@@ -12,6 +12,7 @@ reported, never replaced with made-up values.
 from __future__ import annotations
 
 import hashlib
+import time
 from datetime import date, datetime, timezone
 
 import httpx
@@ -28,10 +29,24 @@ def _prov(source: str, url: str, params: dict, content: bytes) -> dict:
             "sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content)}
 
 
-def _get(url: str, params: dict, timeout: float = 60) -> httpx.Response:
-    r = httpx.get(url, params=params, headers=UA, timeout=timeout, follow_redirects=True)
-    r.raise_for_status()
-    return r
+def _get(url: str, params: dict, timeout: float = 60, retries: int = 3, sleep=time.sleep) -> httpx.Response:
+    """GET with bounded exponential backoff on network errors, 429 and 5xx (polite to free services)."""
+    delay = 5.0
+    for attempt in range(retries + 1):
+        try:
+            r = httpx.get(url, params=params, headers=UA, timeout=timeout, follow_redirects=True)
+            if r.status_code in (429, 500, 502, 503, 504) and attempt < retries:
+                sleep(delay)
+                delay *= 2
+                continue
+            r.raise_for_status()
+            return r
+        except httpx.TransportError:
+            if attempt == retries:
+                raise
+            sleep(delay)
+            delay *= 2
+    raise RuntimeError("unreachable")
 
 
 def daily_max_from_hourly(times: list[str], temps: list) -> dict[date, float]:
