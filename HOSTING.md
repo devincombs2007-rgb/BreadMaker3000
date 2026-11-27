@@ -23,7 +23,7 @@ after 60 days without repository activity. Runs are capped at 6 h. There is no p
 by `breadmaker/statechain.py`. The next run finds the newest **non-expired** artifact by name, checks
 its SHA-256 manifest and SQLite integrity, and **stops with "STATE LOST"** rather than starting over
 if nothing valid is found. A failed run uploads nothing, so the previous good state stays current.
-Artifacts expire after 90 days. An expired artifact halts the chain until the owner explicitly resets it. **Known gap:** if GitHub later purges expired artifacts completely, the chain can't tell that apart from a first run and would start fresh. The daily health check flags artifacts that are near expiry well before that.
+Artifacts expire after 90 days. An expired artifact halts the chain until the owner explicitly resets it. **Known gap:** if GitHub later purges expired artifacts completely, the chain can't tell that apart from a first run and would start fresh. The daily health check opens an alert issue once the newest state is more than 2 days old, long before it could expire.
 
 ## Kalshi data constraint (important)
 
