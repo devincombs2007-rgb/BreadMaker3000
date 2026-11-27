@@ -35,6 +35,24 @@ All three gates are required:
    `.env`; the workflow sets it after the guard job passes. For GitHub Actions, also set the
    repository variable `KALSHI_API_ENABLED=true`.
 
+## Kalshi Demo (mock funds) - prepared, OFF
+
+Kalshi's docs describe a separate Demo environment with **mock funds** and **separate accounts and keys**
+(demo keys only work on demo endpoints). Recommended host: `external-api.demo.kalshi.co` (legacy
+`demo-api.kalshi.co` still works).
+
+| Property | Implementation |
+|---|---|
+| Separate gate | `kalshi_demo_access_allowed`: only demo hosts, flag `kalshi_demo.api_enabled`, env `KALSHI_DEMO_TERMS_ACCEPTED=demo-terms-accepted` |
+| Gates cannot cross | Production gate accepts only `api.elections.kalshi.com`; the demo gate refuses it; neither attestation opens the other (tested) |
+| Redirect guard | Client refuses any response served from a different host |
+| Separate book | Ledger engine `kalshi_demo`, own state artifact `kalshi-demo-state` |
+| Workflow | `kalshi-demo.yml`: variable `KALSHI_DEMO_ENABLED=true` **and** private repo; edits only the demo section of the config |
+| Scope | Read-only demo market data plus **local** simulated fills. Authenticated demo order placement (request signing with a demo key) is **not built**. It would be the first order-placing code in the repo and needs your explicit approval and a demo API key. |
+
+Demo data is still Kalshi API data. The Developer Agreement and any demo-specific terms apply, and
+demo data must stay private like production data.
+
 ## Pipeline
 
 ```
@@ -65,7 +83,9 @@ discover open events/markets (all categories; paginated; <=5 req/s; backoff on 4
 | Weather: daily high (KXHIGH*) | Forecast issued about 1 day ahead, plus a past-only residual pool against the NWS CLI high (integer °F, local standard-time day) | Open-Meteo, NWS CLI via IEM | Validated on real data (see RESEARCH_RESULTS.md). Trades only if the market's rules text names the configured station. |
 | Crypto price thresholds | Zero-drift log-normal or Student-t with EWMA volatility; volatility band as the uncertainty | Public exchange OHLCV | Validated on real data. Basis risk: Kalshi settles on an index, not one exchange. |
 | Any event with strike ladders or brackets | Structural (model-free) | Order books only | Unit-tested; needs live books |
-| Sports, politics, economics, entertainment, technology, other | **None** | No free, reliable, terms-compatible evidence source integrated | **Rejected with reason** (zero allocation) |
+| NFL / MLB / NBA game winners | Elo (FiveThirtyEight methodology) + logistic/LightGBM challengers | nflverse, Retrosheet, FiveThirtyEight | Validated in the tournament (RESEARCH_RESULTS.md); **not routed** until it beats baselines, mapping is verified on live data, and it beats the market |
+| Economics: CPI MoM, unemployment | statsmodels AutoReg + baselines + LightGBM | BLS API v1 | Validated in the tournament; **not routed** (revised vs first-release data) |
+| NCAA, Fed decisions, politics, entertainment, technology, other | **None** | No free, reliable, terms-compatible source (DATA_SOURCES.md) | **Rejected with reason** |
 
 Economics would need data feeds (CPI and jobs nowcasts, Fed funds futures) that are paid, need
 keys, or have unclear terms. Sports needs odds or Elo data under compatible terms. Rejection is the
@@ -81,6 +101,14 @@ honest default: the system does not guess.
 - The live docs (docs.kalshi.com) were not reachable from the build environment. Endpoint shapes
   follow Trade API v2 as known at build time and will be confirmed on the first authorized run.
 
+## Combinations and parlays
+
+`breadmaker/forecasting/joint.py` combines leg probabilities with a **Gaussian copula**, or with the
+**empirical joint** of historical same-date residual vectors. Its uncertainty interval comes from
+perturbing the marginal probabilities and the correlation. Independence (multiplying the leg
+probabilities) is kept only as a reference. The forecast validation measures all three on real
+same-day city pairs.
+
 ## Risk controls (simulated $25)
 
 | Control | Default | Hard bound |
@@ -91,6 +119,12 @@ honest default: the system does not guess.
 | Max total exposure | 50% | ≤ 100% |
 | Min edge (conservative p − price − fee per contract) | 0.03 | ≥ 0.01 |
 | Max spread | 0.10 | ≤ 0.5 |
+| Correlation-group budget (e.g. all same-day weather markets) | 25% | ≤ 50% |
+| Cash reserve | 50% of equity | ≥ 25% |
+| Uncertainty shrink | size × (1 − interval width / 0.5) | |
+| Drawdown throttle | size falls linearly to 0 at 20% drawdown | ≤ 30% |
+| Price bounds | 3¢ – 97¢ | |
+| Max open positions | 10 | ≤ 50 |
 | Daily loss halt / drawdown halt | 5% / 20% | via the shared risk engine |
 
 The global kill switch and per-engine halts from the shared risk engine apply.
@@ -100,7 +134,8 @@ The global kill switch and per-engine halts from the shared risk engine apply.
 - **Weather residual pools** use days up to t−2 only, because the t−1 observation isn't final when
   the forecast is issued (tested).
 - **Recalibration** for a prediction is fitted only on predictions **settled before it was issued**.
-  It is adopted only if it beats raw probabilities on held-out walk-forward data with at least 50
-  points (tested, including a deliberate leak scenario).
+  It is adopted only if the walk-forward improvement is **statistically significant**: the
+  block-bootstrap 95% interval must lie entirely below zero. This is deliberately conservative.
+  A real but small improvement on 350 predictions is **not** adopted (tested).
 - **Evidence** carries fetch timestamps; `EvidenceStore.available_at` checks that nothing was
   fetched after the decision time.
