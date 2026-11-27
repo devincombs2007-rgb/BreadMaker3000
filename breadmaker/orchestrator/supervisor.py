@@ -1,7 +1,7 @@
 """Central orchestration loop (runs in the `core` container).
 
 * initialises the three isolated portfolios
-* runs the Freqtrade sentinel every cycle
+* runs a Kalshi research/paper cycle every KALSHI_CYCLE_SECONDS - only when access is authorized
 * watches worker heartbeats and resource usage
 * writes daily/weekly reports
 * bounded, resource-aware research jobs are run via `breadmaker research` on a
@@ -51,28 +51,23 @@ def main(interval: int = 60) -> None:
     except (FileNotFoundError, json.JSONDecodeError):
         state = {}
 
-    # FREQTRADE_INSTANCES="freqtrade=http://freqtrade:8080,freqai_shadow=http://freqai:8081"
-    from ..integrations.freqtrade_client import FreqtradeClient
-    instances = {}
-    spec = os.environ.get("FREQTRADE_INSTANCES") or (
-        f"freqtrade={os.environ['FREQTRADE_API_URL']}" if os.environ.get("FREQTRADE_API_URL") else "")
-    for item in filter(None, (x.strip() for x in spec.split(","))):
-        name, url = item.split("=", 1)
-        instances[name] = FreqtradeClient(url, os.environ.get("FREQTRADE_API_USER", "breadmaker"),
-                                          os.environ.get("FREQTRADE__API_SERVER__PASSWORD", ""))
+    from ..config import kalshi_access_allowed
+    kalshi_every = int(os.environ.get("KALSHI_CYCLE_SECONDS", "14400"))
     report_dir = settings.data_dir / "reports"
     last_report_day = state.get("last_report_day")
 
     while _running:
         try:
-            from .freqtrade_sentinel import run_once
-            for name, client in instances.items():
-                try:
-                    res = run_once(client, conn, risk, state.setdefault(name, {}), engine=name)
-                except Exception as exc:  # one instance failing must not stop monitoring of others
-                    res = {"ok": False, "error": repr(exc)[:200]}
-                    risk.log(name, "warning", "sentinel_error", res["error"])
-                log.info("sentinel %s: %s", name, res)
+            allowed, why = kalshi_access_allowed(settings.kalshi)
+            last = state.get("kalshi_last_run", 0)
+            if allowed and time.time() - last >= kalshi_every:
+                from ..kalshi.client import KalshiPublicClient
+                from ..kalshi.pipeline import run_cycle
+                res = run_cycle(settings, KalshiPublicClient(settings.kalshi))
+                state["kalshi_last_run"] = time.time()
+                beat(conn, "kalshi", "running", f"forecasts logged; requests={res.get('requests')}")
+            elif not allowed:
+                beat(conn, "kalshi", "disabled", why)
             mem = psutil.virtual_memory().percent
             cpu = psutil.cpu_percent(interval=None)
             disk = psutil.disk_usage(str(settings.data_dir)).percent
@@ -80,7 +75,7 @@ def main(interval: int = 60) -> None:
             if mem > 92 or disk > 92:
                 risk.log("system", "warning", "resources", f"mem={mem}% disk={disk}%")
             for w in worker_status(conn, settings.raw.get("schedule", {}).get("heartbeat_timeout_seconds", 300)):
-                if w["status"] == "stale" and w["worker"] != "lumibot":  # lumibot sleeps outside market hours
+                if w["status"] == "stale" and w["worker"] not in ("kalshi",):
                     risk.log(w["worker"], "warning", "heartbeat_stale", f"last seen {w['last_seen']}")
             now = datetime.now(timezone.utc)
             hhmm = settings.raw.get("schedule", {}).get("daily_report_utc", "21:30")

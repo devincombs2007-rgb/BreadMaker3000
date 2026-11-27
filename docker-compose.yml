@@ -1,10 +1,7 @@
-# BreadMaker3000 - Oracle Cloud Always Free (Ampere A1 arm64 or AMD64) deployment.
-# SIMULATION ONLY. Nothing is published to the internet: every port binds to 127.0.0.1.
-# Remote access is via Tailscale (private network) - see DEPLOYMENT.md.
-#
-#   docker compose up -d                          # core + freqtrade + lumibot + dashboard
-#   docker compose --profile freqai up -d         # + FreqAI shadow challenger
-#   docker compose --profile research run --rm lean   # on-demand LEAN backtest
+# BreadMaker3000 - Prediction Market Intelligence (SIMULATION ONLY).
+# Nothing is published to the internet: the dashboard binds to 127.0.0.1 (reach it via Tailscale).
+# Kalshi API access stays OFF unless config kalshi.api_enabled=true AND .env contains
+# KALSHI_ACCESS_AUTHORIZED=written-authorization-on-file (see KALSHI.md).
 
 name: breadmaker
 
@@ -19,65 +16,18 @@ volumes:
   bm-data: {}
 
 services:
-  freqtrade:
-    <<: *common
-    image: freqtradeorg/freqtrade:2026.10
-    command: >
-      trade --config /freqtrade/user_data/config.json --strategy BreadTrendV1
-      --logfile /freqtrade/user_data/logs/freqtrade.log
-    environment:
-      BREADMAKER_SHARED_DIR: /freqtrade/user_data/shared
-      BREADMAKER_ENGINE: freqtrade
-    volumes:
-      - ./engines/freqtrade/user_data:/freqtrade/user_data
-      - bm-data:/freqtrade/user_data/shared:ro     # risk state visible, cannot be altered by the bot
-    ports:
-      - "127.0.0.1:8080:8080"                      # FreqUI (private; reach via Tailscale)
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/api/v1/ping',timeout=5)"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-    mem_limit: 1g
-    cpus: 1.0
-
-  freqai:
-    <<: *common
-    profiles: ["freqai"]
-    image: freqtradeorg/freqtrade:2026.10_freqai
-    command: >
-      trade --config /freqtrade/user_data/config.json --config /freqtrade/user_data/config.freqai.json
-      --strategy BreadFreqAIV1 --freqaimodel LightGBMRegressor
-      --logfile /freqtrade/user_data/logs/freqai.log
-    environment:
-      BREADMAKER_SHARED_DIR: /freqtrade/user_data/shared
-      BREADMAKER_ENGINE: freqai_shadow
-    volumes:
-      - ./engines/freqtrade/user_data:/freqtrade/user_data
-      - bm-data:/freqtrade/user_data/shared:ro
-    ports:
-      - "127.0.0.1:8081:8081"
-    mem_limit: 3g
-    cpus: 1.5
-
   core:
     <<: *common
     build: {context: ., dockerfile: docker/core.Dockerfile}
-    image: breadmaker/core:0.1.0
+    image: breadmaker/core:0.3.0
     command: ["breadmaker", "supervisor"]
-    environment:
-      # The freqai instance is optional; while it is not running its sentinel reports "down".
-      FREQTRADE_INSTANCES: freqtrade=http://freqtrade:8080,freqai_shadow=http://freqai:8081
-      FREQTRADE_API_USER: breadmaker
     volumes: ["bm-data:/data"]
-    depends_on: [freqtrade]
     mem_limit: 512m
     cpus: 0.5
 
   dashboard:
     <<: *common
-    image: breadmaker/core:0.1.0
+    image: breadmaker/core:0.3.0
     command: ["breadmaker", "dashboard", "--host", "0.0.0.0", "--port", "8000"]
     volumes: ["bm-data:/data"]
     ports:
@@ -90,30 +40,3 @@ services:
       retries: 3
     mem_limit: 256m
     cpus: 0.5
-
-  lumibot:
-    <<: *common
-    build: {context: ., dockerfile: docker/lumibot.Dockerfile}
-    image: breadmaker/lumibot:0.1.0
-    environment:
-      ALPACA_PAPER: "true"
-    volumes: ["bm-data:/data"]
-    depends_on: [core]
-    mem_limit: 1g
-    cpus: 1.0
-
-  lean:
-    profiles: ["research"]
-    image: quantconnect/lean:18294
-    entrypoint: ["dotnet", "QuantConnect.Lean.Launcher.dll"]
-    command: >
-      --algorithm-type-name BreadLeanTrend --algorithm-language Python
-      --algorithm-location /Algo/main.py --data-folder /Lean/Data
-      --results-destination-folder /Results --close-automatically true
-      --environment backtesting
-    volumes:
-      - ./engines/lean/BreadLeanTrend:/Algo:ro
-      - ./engines/lean/data:/Lean/Data
-      - ./engines/lean/results:/Results
-    mem_limit: 6g
-    cpus: 2.0

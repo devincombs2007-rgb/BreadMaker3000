@@ -1,18 +1,15 @@
-import json
-
 import pytest
 
-from breadmaker.config import (REPO_ROOT, RiskLimits, SafetyError, assert_alpaca_key_looks_paper,
-                               assert_alpaca_paper, assert_freqtrade_dry_run, load_settings)
+from breadmaker.config import (KalshiConfig, RiskLimits, SafetyError, kalshi_access_allowed, load_settings)
+from conftest import ROOT as REPO_ROOT
 from breadmaker.safety_scan import scan
 
 
 def test_settings_load(tmp_settings):
     assert tmp_settings.risk.max_position_pct == 0.10
-    assert tmp_settings.risk.max_risk_per_trade_pct == 0.005
-    assert tmp_settings.risk.daily_loss_halt_pct == 0.01
-    assert tmp_settings.risk.max_drawdown_halt_pct == 0.05
-    assert sum(e.initial_capital for e in tmp_settings.engines.values() if not e.shadow) == 3000
+    assert tmp_settings.risk.daily_loss_halt_pct == 0.05
+    assert tmp_settings.risk.max_drawdown_halt_pct == 0.20
+    assert list(tmp_settings.engines) == ["kalshi"]
 
 
 def test_non_simulation_mode_rejected(tmp_path):
@@ -29,37 +26,6 @@ def test_risk_limit_ceilings(kw):
         RiskLimits(**kw)
 
 
-def test_alpaca_paper_enforced():
-    assert_alpaca_paper("https://paper-api.alpaca.markets", "true")
-    assert_alpaca_paper(None, True)
-    for url, flag in [("https://api.alpaca.markets", "true"), ("https://evil.example", "true"),
-                      ("https://paper-api.alpaca.markets", "false")]:
-        with pytest.raises(SafetyError):
-            assert_alpaca_paper(url, flag)
-    with pytest.raises(SafetyError):
-        assert_alpaca_key_looks_paper("AKXXXXXXXXXXXXXXXXXX")
-    assert_alpaca_key_looks_paper("PKXXXXXXXXXXXXXXXXXX")
-
-
-def test_freqtrade_repo_config_is_dry_run():
-    cfg = json.loads((REPO_ROOT / "engines/freqtrade/user_data/config.json").read_text())
-    assert_freqtrade_dry_run(cfg)
-    assert cfg["dry_run_wallet"] == 1000
-
-
-@pytest.mark.parametrize("mut", [
-    lambda c: c.update(dry_run=False),
-    lambda c: c.update(trading_mode="futures"),
-    lambda c: c.update(margin_mode="isolated"),
-    lambda c: c["exchange"].update(key="abc", secret="def"),
-])
-def test_freqtrade_unsafe_configs_rejected(mut):
-    cfg = json.loads((REPO_ROOT / "engines/freqtrade/user_data/config.json").read_text())
-    mut(cfg)
-    with pytest.raises(SafetyError):
-        assert_freqtrade_dry_run(cfg)
-
-
 def test_repository_safety_scan_passes():
     assert scan(REPO_ROOT) == []
 
@@ -68,3 +34,35 @@ def test_safety_scan_detects_problems(tmp_path):
     (tmp_path / "x.py").write_text('URL = "https://api.alpaca.markets/v2"\nKEY="AKABCDEFGHIJKLMNOPQR"\n')
     probs = scan(tmp_path)
     assert any("live-trading" in p for p in probs) and any("LIVE key" in p for p in probs)
+
+
+def test_kalshi_scan_rejects_trading_code(tmp_path):
+    (tmp_path / "bad.py").write_text('h = {"KALSHI-ACCESS-SIGNATURE": sig}\nurl = base + "/portfolio/orders"\n')
+    probs = scan(tmp_path)
+    assert len([p for p in probs if "live-trading" in p]) == 2
+
+
+def test_kalshi_access_off_by_default(tmp_settings):
+    assert tmp_settings.kalshi.api_enabled is False
+    ok, why = kalshi_access_allowed(tmp_settings.kalshi, {})
+    assert not ok and "api_enabled is false" in why
+
+
+def test_kalshi_access_requires_both_flag_and_attestation():
+    cfg = KalshiConfig(api_enabled=True)
+    assert not kalshi_access_allowed(cfg, {})[0]
+    assert not kalshi_access_allowed(cfg, {"KALSHI_ACCESS_AUTHORIZED": "yes"})[0]
+    assert kalshi_access_allowed(cfg, {"KALSHI_ACCESS_AUTHORIZED": "written-authorization-on-file"})[0]
+
+
+@pytest.mark.parametrize("kw", [{"base_url": "https://evil.example/trade-api/v2"}, {"kelly_fraction": 0.9},
+                                {"max_position_pct": 0.5}, {"min_edge": 0.0}, {"taker_fee_rate": 0.01},
+                                {"max_requests_per_second": 50}])
+def test_kalshi_limits_cannot_be_loosened(kw):
+    with pytest.raises(SafetyError):
+        KalshiConfig(**kw)
+
+
+def test_default_bankroll_is_25(tmp_settings):
+    assert tmp_settings.kalshi.bankroll == 25.0
+    assert tmp_settings.engines["kalshi"].initial_capital == 25

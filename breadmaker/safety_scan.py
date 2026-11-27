@@ -1,16 +1,14 @@
 """Static repository safety scan (runs in CI and before deploy).
 
-Fails if any tracked config could enable real-money trading or if anything that
-looks like a credential is present in tracked files.
+Fails if any tracked file could enable real-money trading, contains Kalshi order/portfolio/
+request-signing code, or contains anything that looks like a credential.
 """
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 from pathlib import Path
 
-from .config import SafetyError, assert_freqtrade_dry_run
 
 SECRET_PATTERNS = [
     (re.compile(r"\bAK[A-Z0-9]{18}\b"), "Alpaca LIVE key id"),
@@ -20,7 +18,14 @@ SECRET_PATTERNS = [
     (re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}"), "Anthropic key"),
     (re.compile(r"(?i)\b(api[_-]?secret|secret[_-]?key|password)\s*[=:]\s*['\"]?[A-Za-z0-9/+]{24,}"), "inline secret"),
 ]
-LIVE_ENDPOINTS = [re.compile(r"https?://api\.alpaca\.markets"), re.compile(r"(?i)\bPAPER\b\s*[\"']?\s*[:=]\s*False")]
+LIVE_ENDPOINTS = [
+    re.compile(r"https?://api\.alpaca\.markets"),
+    re.compile(r"(?i)\bPAPER\b\s*[\"']?\s*[:=]\s*False"),
+    # Kalshi: this codebase must never place orders, touch portfolios or sign authenticated requests
+    re.compile(r"/portfolio/orders|/portfolio/balance|/portfolio/positions"),
+    re.compile(r"KALSHI-ACCESS-(KEY|SIGNATURE|TIMESTAMP)"),
+    re.compile(r"(?i)\.post\([^)]*kalshi|kalshi[^\n]*\.post\("),
+]
 SKIP_SUFFIXES = {".png", ".jpg", ".ico", ".feather", ".sqlite", ".gz", ".zip"}
 
 
@@ -50,13 +55,6 @@ def scan(root: Path) -> list[str]:
             for pat in LIVE_ENDPOINTS:
                 if pat.search(text):
                     problems.append(f"{rel}: live-trading pattern {pat.pattern!r}")
-        if f.suffix == ".json" and "freqtrade" in f.parts and f.name.startswith("config") and "freqai" not in f.name:
-            try:
-                assert_freqtrade_dry_run(json.loads(text))
-            except SafetyError as exc:
-                problems.append(f"{rel}: {exc}")
-            except json.JSONDecodeError as exc:
-                problems.append(f"{rel}: invalid JSON {exc}")
         if f.name == ".env":
             problems.append(f"{rel}: .env must never be committed")
     return problems

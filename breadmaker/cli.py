@@ -41,6 +41,11 @@ def main(argv: list[str] | None = None) -> int:
     ml.add_argument("--horizon", type=int, default=12)
     ml.add_argument("--periods-per-year", type=float, default=24 * 365)
     sub.add_parser("safety-check", help="scan repo configs for live-trading risks")
+    kr = sub.add_parser("kalshi-run", help="one Kalshi research/paper cycle (requires authorization)")
+    kr.add_argument("--max-books", type=int, default=300)
+    sub.add_parser("kalshi-status", help="show whether Kalshi API access is allowed and why")
+    vf = sub.add_parser("validate-forecasts", help="validate forecasting models on real public data")
+    vf.add_argument("--out", default="validation_results")
     a = ap.parse_args(argv)
 
     if a.cmd == "hash-password":
@@ -58,11 +63,28 @@ def main(argv: list[str] | None = None) -> int:
             print("SAFETY:", p)
         print("safety-check:", "FAIL" if problems else "PASS")
         return 1 if problems else 0
-    from .config import load_settings
+    from .config import kalshi_access_allowed, load_settings
     from .db import connect
     from .risk import KillSwitch
 
     s = load_settings()
+    if a.cmd == "kalshi-status":
+        ok, why = kalshi_access_allowed(s.kalshi)
+        print(json.dumps({"kalshi_api_allowed": ok, "reason": why, "bankroll": s.kalshi.bankroll}))
+        return 0
+    if a.cmd == "kalshi-run":
+        from .kalshi.client import KalshiAccessDisabled, KalshiPublicClient
+        from .kalshi.pipeline import run_cycle
+        try:
+            client = KalshiPublicClient(s.kalshi)
+        except KalshiAccessDisabled as exc:
+            print(f"Kalshi access disabled: {exc}")
+            return 3
+        print(json.dumps(run_cycle(s, client, max_books=a.max_books), indent=2, default=str))
+        return 0
+    if a.cmd == "validate-forecasts":
+        from .forecasting.validation import main as vmain
+        return vmain(["--out", a.out])
     if a.cmd == "supervisor":
         from .orchestrator.supervisor import main as sup
         sup()

@@ -29,7 +29,7 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
-from ..config import SafetyError, load_settings
+from ..config import kalshi_access_allowed, load_settings
 from ..db import connect
 from ..ledger import Ledger
 from ..metrics import max_drawdown, sharpe, sortino, trade_stats
@@ -215,24 +215,6 @@ def create_app(db_path: str | None = None, password_hash: str | None = None, sec
             "all", "warning", "kill_switch", f"released by owner (dashboard); halts cleared: {released or 'none'}")
         return {"kill_switch": False, "halts_released": released}
 
-    @app.get("/api/settings/alpaca")
-    def alpaca_status(_: dict = Depends(require)):
-        return store.alpaca_status()  # never returns the keys themselves
-
-    @app.post("/api/settings/alpaca")
-    def alpaca_save(request: Request, key: str = Form(...), secret: str = Form(...), password: str = Form(...),
-                    _: dict = Depends(require_csrf), conn=Depends(db)):
-        ip = request.client.host if request.client else "?"
-        if not limiter.allowed(ip) or not verify_password(password, current_hash()):
-            limiter.fail(ip)
-            raise HTTPException(403, "dashboard password required")
-        try:
-            store.save_alpaca(key, secret)
-        except SafetyError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        RiskEngine(settings.risk, kill, conn).log("lumibot", "info", "settings", "Alpaca PAPER keys updated by owner")
-        return store.alpaca_status()
-
     return app
 
 
@@ -309,6 +291,44 @@ def build_summary(conn, settings, kill: KillSwitch) -> dict:
         "risk_events": [dict(r) for r in conn.execute("SELECT * FROM risk_events ORDER BY id DESC LIMIT 30")],
         "models": models,
         "strategy_rankings": exps,
+        "kalshi": kalshi_summary(conn, settings),
         "system": {"cpu_pct": psutil.cpu_percent(interval=None), "mem_pct": vm.percent,
                    "uptime_s": int(time.time() - psutil.boot_time())},
     }
+
+
+def kalshi_summary(conn, settings) -> dict:
+    """Prediction-market section: access status, paper book, predictions, calibration, validation."""
+    import json as _json
+
+    from ..kalshi.tracking import metrics, settled_records
+    allowed, why = kalshi_access_allowed(settings.kalshi)
+    counts = {r[0]: r[1] for r in conn.execute("SELECT status, COUNT(*) FROM predictions GROUP BY status")}
+    reasons = [dict(r) for r in conn.execute(
+        "SELECT reason, COUNT(*) n FROM predictions WHERE status='rejected' GROUP BY reason ORDER BY n DESC LIMIT 8")]
+    settled = settled_records(conn)
+    by_model = {}
+    for model in {r["model"] for r in settled}:
+        rs = [r for r in settled if r["model"] == model]
+        by_model[model] = {k: _clean(v) for k, v in metrics([r["p"] for r in rs], [r["outcome"] for r in rs]).items()}
+    recent = [dict(r) for r in conn.execute(
+        "SELECT issued_at, ticker, model, p, p_low, p_high, yes_ask, no_ask, decision FROM predictions "
+        "WHERE status='forecast' ORDER BY id DESC LIMIT 15")]
+    for r in recent:
+        d = _json.loads(r.pop("decision") or "{}")
+        r["action"] = (f"BUY {d.get('contracts')} {d.get('side', '').upper()} @ {d.get('price')}" if d.get("side")
+                       else (d.get("reason") or "no decision"))
+    validation = None
+    vf = settings.data_dir / "validation" / "validation.json"
+    if vf.exists():
+        try:
+            v = _json.loads(vf.read_text())
+            validation = {"generated_at": v.get("generated_at"),
+                          "weather": {k: {"brier": w.get("model", {}).get("brier"),
+                                          "skill_vs_gaussian": w.get("brier_skill_vs_gaussian")}
+                                      for k, w in v.get("weather", {}).items()}}
+        except (ValueError, OSError):
+            validation = None
+    return {"api_access": {"allowed": allowed, "reason": why}, "bankroll": settings.kalshi.bankroll,
+            "predictions": counts, "top_rejection_reasons": reasons, "settled_metrics": by_model,
+            "recent": recent, "validation": validation}

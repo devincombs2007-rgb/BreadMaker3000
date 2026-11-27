@@ -1,0 +1,40 @@
+name: forecast-validation
+
+# Out-of-sample validation of the forecasting models on REAL public data. Uses NO Kalshi data, so it
+# is allowed in this public repository. Sources: Open-Meteo (CC BY 4.0, free non-commercial tier,
+# ~10 calls/run), NWS Daily Climate Reports via Iowa Environmental Mesonet, public crypto OHLCV.
+# Only derived metrics are uploaded (no raw third-party data). ~10 runner-minutes per run.
+
+on:
+  schedule:
+    - cron: "23 7 * * 1"         # Mondays 07:23 UTC (schedules only fire on the default branch)
+  workflow_dispatch:
+  push:
+    paths:
+      - "breadmaker/forecasting/**"
+      - "config/breadmaker.yaml"
+      - ".github/workflows/forecast-validation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: forecast-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements/research.lock && pip install --no-deps -e .
+      - name: Validate weather and crypto forecasting models (walk-forward, out-of-sample)
+        run: breadmaker validate-forecasts --out validation_results
+      - if: always()
+        run: test -f validation_results/validation.md && cat validation_results/validation.md >> "$GITHUB_STEP_SUMMARY" || true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: {name: forecast-validation, path: validation_results/validation.json, retention-days: 90}

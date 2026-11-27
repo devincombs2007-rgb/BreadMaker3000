@@ -1,0 +1,63 @@
+name: kalshi-paper
+
+# Periodic Kalshi research + paper-trading cycle on GitHub-hosted runners. DISABLED unless ALL hold:
+#   1. repository variable KALSHI_API_ENABLED == 'true' (owner sets it after Kalshi's written authorization),
+#   2. the repository is PRIVATE (Kalshi Developer Agreement v1.1 s3.1 forbids sharing API data with third
+#      parties; artifacts, logs and summaries of a public repo are visible to others),
+#   3. the code-level gate (config + KALSHI_ACCESS_AUTHORIZED attestation) passes.
+# State (SQLite book) is carried between runs as a short-lived private artifact. Simulation only.
+
+on:
+  schedule:
+    - cron: "41 */4 * * *"       # every 4 h; schedules only fire on the default branch
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kalshi-paper
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    outputs:
+      allowed: ${{ steps.g.outputs.allowed }}
+    steps:
+      - id: g
+        run: |
+          if [ "${{ vars.KALSHI_API_ENABLED }}" != "true" ]; then
+            echo "Kalshi cycle disabled: repository variable KALSHI_API_ENABLED is not 'true' (see KALSHI.md)."; echo "allowed=false" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.repository.private }}" != "true" ]; then
+            echo "Kalshi cycle refused: repository is PUBLIC; Kalshi data must not be shared with third parties."; echo "allowed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  cycle:
+    needs: guard
+    if: needs.guard.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BREADMAKER_DATA_DIR: ${{ github.workspace }}/state
+      KALSHI_ACCESS_AUTHORIZED: written-authorization-on-file
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements/research.lock && pip install --no-deps -e .
+      - name: Restore previous paper-trading state (latest successful run's artifact)
+        run: |
+          mkdir -p state
+          run=$(gh run list --workflow kalshi-paper.yml --status success --limit 1 --json databaseId -q '.[0].databaseId' || true)
+          if [ -n "$run" ]; then gh run download "$run" -n kalshi-state -D state || echo "no previous state"; fi
+      - name: Enable API in config for this run (the attestation env var is the second gate)
+        run: sed -i 's/^  api_enabled: false/  api_enabled: true/' config/breadmaker.yaml
+      - name: Research + paper cycle
+        run: breadmaker kalshi-run --max-books 300 > state/last_run.json
+      - uses: actions/upload-artifact@v4
+        with: {name: kalshi-state, path: state, retention-days: 14}

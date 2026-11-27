@@ -20,7 +20,5 @@ else
   $SUDO tailscale up --ssh=false --hostname=breadmaker
 fi
 $SUDO tailscale serve --bg --https=443 http://127.0.0.1:8000
-$SUDO tailscale serve --bg --https=8443 http://127.0.0.1:8080
 NAME=$($SUDO tailscale status --json | python3 -c 'import sys,json;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')
 echo "Dashboard: https://${NAME}/"
-echo "FreqUI:    https://${NAME}:8443/"

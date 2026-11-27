@@ -6,7 +6,6 @@ reject any configuration that could route an order to a real-money venue.
 """
 from __future__ import annotations
 
-import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -23,9 +22,10 @@ class SafetyError(RuntimeError):
     """Raised when a configuration would permit real-money trading."""
 
 
-# Alpaca: only the paper trading host is acceptable for trading endpoints.
-ALPACA_PAPER_HOST = "paper-api.alpaca.markets"
-ALPACA_LIVE_HOSTS = ("api.alpaca.markets",)
+# Kalshi: read-only public market data. These are the only hosts the client may call.
+KALSHI_ALLOWED_HOSTS = ("api.elections.kalshi.com", "demo-api.kalshi.co")
+KALSHI_AUTHORIZATION_ENV = "KALSHI_ACCESS_AUTHORIZED"
+KALSHI_AUTHORIZATION_VALUE = "written-authorization-on-file"
 _URL_HOST = re.compile(r"^(?:[a-z]+://)?([^/:]+)", re.I)
 
 
@@ -34,41 +34,21 @@ def _host(url: str) -> str:
     return (m.group(1) if m else "").lower()
 
 
-def assert_alpaca_paper(base_url: str | None, paper_flag: Any) -> None:
-    """Reject anything except Alpaca paper trading."""
-    if str(paper_flag).strip().lower() not in ("true", "1", "yes"):
-        raise SafetyError("ALPACA_PAPER must be true. Live Alpaca trading is not supported.")
-    if base_url:
-        host = _host(base_url)
-        if host in ALPACA_LIVE_HOSTS or host != ALPACA_PAPER_HOST:
-            raise SafetyError(f"Alpaca endpoint {host!r} is not the paper endpoint {ALPACA_PAPER_HOST!r}.")
-
-
-def assert_alpaca_key_looks_paper(api_key: str | None) -> None:
-    """Alpaca paper keys start with 'PK'; live keys start with 'AK'."""
-    if api_key and api_key.strip().upper().startswith("AK"):
-        raise SafetyError("This looks like a LIVE Alpaca key (starts with 'AK'). Use paper keys (start with 'PK').")
-
-
-def assert_freqtrade_dry_run(ft_config: dict) -> None:
-    """Freqtrade must run in dry-run, spot, unleveraged mode with no exchange keys."""
-    if ft_config.get("dry_run") is not True:
-        raise SafetyError("Freqtrade config must set dry_run: true.")
-    if ft_config.get("trading_mode", "spot") != "spot":
-        raise SafetyError("Only spot trading_mode is allowed.")
-    if ft_config.get("margin_mode", "") not in ("", None):
-        raise SafetyError("margin_mode must be empty (no margin).")
-    ex = ft_config.get("exchange", {})
-    if ex.get("key") or ex.get("secret") or ex.get("password"):
-        raise SafetyError("Exchange API keys must not be configured; dry-run uses public market data only.")
-    api = ft_config.get("api_server", {})
-    if api.get("enabled") and api.get("listen_ip_address") not in ("127.0.0.1", "0.0.0.0"):
-        raise SafetyError("Freqtrade API must listen on loopback or the private Docker network only.")
-
-
-def load_freqtrade_config(path: str | Path) -> dict:
-    with open(path) as fh:
-        return json.load(fh)
+def kalshi_access_allowed(cfg: "KalshiConfig", env: dict | None = None) -> tuple[bool, str]:
+    """Kalshi API access is OFF unless BOTH are true:
+    1. config `kalshi.api_enabled: true`, and
+    2. env KALSHI_ACCESS_AUTHORIZED == 'written-authorization-on-file' (owner attests Kalshi
+       membership and written authorization for this use - Developer Agreement v1.1 s3, s4.1).
+    The GitHub workflow additionally refuses to run Kalshi steps in a public repository (s3.1: no
+    sharing of API data with third parties)."""
+    env = os.environ if env is None else env
+    if not cfg.api_enabled:
+        return False, "kalshi.api_enabled is false (default) - see KALSHI.md"
+    if env.get(KALSHI_AUTHORIZATION_ENV) != KALSHI_AUTHORIZATION_VALUE:
+        return False, f"{KALSHI_AUTHORIZATION_ENV} attestation missing - see KALSHI.md"
+    if _host(cfg.base_url) not in KALSHI_ALLOWED_HOSTS:
+        return False, f"base_url host {_host(cfg.base_url)!r} not allowed"
+    return True, "ok"
 
 
 @dataclass(frozen=True)
@@ -107,6 +87,44 @@ class EngineConfig:
     shadow: bool = False   # challenger/shadow book: tracked and risk-limited, excluded from the $3,000 competition
 
 
+@dataclass(frozen=True)
+class KalshiConfig:
+    api_enabled: bool = False
+    base_url: str = "https://api.elections.kalshi.com/trade-api/v2"
+    max_requests_per_second: float = 5.0
+    bankroll: float = 25.0
+    kelly_fraction: float = 0.25
+    max_position_pct: float = 0.10
+    max_event_exposure_pct: float = 0.20
+    max_total_exposure_pct: float = 0.50
+    min_edge: float = 0.03
+    max_spread: float = 0.10
+    min_hours_to_close: float = 1.0
+    taker_fee_rate: float = 0.07
+    fee_rate_overrides: dict = field(default_factory=dict)  # series_ticker -> rate
+    enabled_models: tuple = ("weather_high_temp", "crypto_price", "structural")
+    weather_stations: dict = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if _host(self.base_url) not in KALSHI_ALLOWED_HOSTS:
+            raise SafetyError(f"Kalshi base_url host {_host(self.base_url)!r} not in {KALSHI_ALLOWED_HOSTS}")
+        bounds = {  # (min, max) - config may tighten, never loosen
+            "max_requests_per_second": (0.1, 10.0),
+            "bankroll": (1.0, 10_000.0),
+            "kelly_fraction": (0.0, 0.5),
+            "max_position_pct": (0.0, 0.25),
+            "max_event_exposure_pct": (0.0, 0.5),
+            "max_total_exposure_pct": (0.0, 1.0),
+            "min_edge": (0.01, 1.0),
+            "max_spread": (0.0, 0.5),
+            "taker_fee_rate": (0.07, 1.0),  # never model fees below Kalshi's standard taker rate
+        }
+        for name, (lo, hi) in bounds.items():
+            v = getattr(self, name)
+            if not (lo <= v <= hi):
+                raise SafetyError(f"kalshi.{name}={v} outside allowed range [{lo}, {hi}]")
+
+
 @dataclass
 class Settings:
     data_dir: Path
@@ -114,6 +132,7 @@ class Settings:
     kill_switch_path: Path
     risk: RiskLimits
     engines: dict[str, EngineConfig] = field(default_factory=dict)
+    kalshi: KalshiConfig = field(default_factory=KalshiConfig)
     raw: dict = field(default_factory=dict)
 
 
@@ -128,7 +147,11 @@ def load_settings(path: str | Path | None = None) -> Settings:
     engines = {
         name: EngineConfig(name=name, **cfg) for name, cfg in (raw.get("engines") or {}).items()
     }
+    kcfg = dict(raw.get("kalshi") or {})
+    if "enabled_models" in kcfg:
+        kcfg["enabled_models"] = tuple(kcfg["enabled_models"])
     return Settings(
+        kalshi=KalshiConfig(**kcfg),
         data_dir=data_dir,
         db_path=data_dir / "breadmaker.sqlite",
         kill_switch_path=data_dir / "KILL_SWITCH",

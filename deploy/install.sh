@@ -33,43 +33,22 @@ fi
 say "3/7 Creating .env with random internal secrets (kept on this server only)"
 if [ ! -f .env ]; then
   umask 077
-  {
-    echo "ALPACA_PAPER=true"
-    echo "FREQTRADE__API_SERVER__PASSWORD='$(openssl rand -hex 24)'"
-    echo "FREQTRADE__API_SERVER__JWT_SECRET_KEY='$(openssl rand -hex 32)'"
-    echo "FREQTRADE__API_SERVER__WS_TOKEN='$(openssl rand -hex 24)'"
-    echo "DASHBOARD_SECURE_COOKIES=true"
-  } > .env
-fi
-if [ "$MEM_MB" -lt 2000 ] && ! grep -q '^COMPOSE_FILE=' .env; then
-  echo "Small machine (${MEM_MB} MB RAM): enabling low-memory profile docker-compose.micro.yml"
-  echo "COMPOSE_FILE=docker-compose.yml:docker-compose.micro.yml" >> .env
+  cp .env.example .env
 fi
 
 say "4/7 Preparing folders"
-mkdir -p engines/freqtrade/user_data/{logs,data} engines/lean/{data,results}
-$SUDO chown -R 1000:1000 engines/freqtrade/user_data   # freqtrade container user
+mkdir -p data
 
 say "5/7 Safety check (refuses to start if anything could trade real money)"
 python3 - <<'PY'
-import json, sys
-c = json.load(open("engines/freqtrade/user_data/config.json"))
-bad = []
-if c.get("dry_run") is not True: bad.append("freqtrade dry_run must be true")
-if c.get("trading_mode", "spot") != "spot": bad.append("spot only")
-if c["exchange"].get("key") or c["exchange"].get("secret"): bad.append("no exchange keys allowed")
-env = open(".env").read()
-if "ALPACA_PAPER=true" not in env: bad.append("ALPACA_PAPER must be true")
-for line in env.splitlines():
-    if line.startswith("ALPACA_API_KEY=") and line.split("=", 1)[1].strip("'\" ").upper().startswith("AK"):
-        bad.append("LIVE Alpaca key detected (AK...). Use PAPER keys (PK...).")
-if bad:
-    print("SAFETY STOP:", *bad, sep="\n  "); sys.exit(1)
-print("safety check PASS")
+import re, sys
+cfg = open("config/breadmaker.yaml").read()
+if not re.search(r"^mode:\s*simulation", cfg, re.M):
+    print("SAFETY STOP: config mode must be simulation"); sys.exit(1)
+print("safety check PASS (simulation only; Kalshi access is", "requested" if re.search(r"^\s*api_enabled:\s*true", cfg, re.M) else "OFF", ")")
 PY
 
 say "6/7 Building and starting containers (first run takes 10-20 minutes)"
-$SUDO docker compose pull freqtrade
 $SUDO docker compose build
 $SUDO docker compose up -d
 sleep 20
@@ -79,6 +58,6 @@ say "7/7 Done"
 cat <<'TXT'
 Next (see OWNER_SETUP.md):
   * Private phone access:  bash deploy/tailscale.sh   (cloud-init already does this)
-  * Open the dashboard, choose your password, then add Alpaca PAPER keys in Settings.
+  * Open the dashboard and choose your password. Kalshi access stays OFF (see KALSHI.md).
 Everything is SIMULATED. No real money is ever traded.
 TXT

@@ -71,8 +71,10 @@ class Ledger:
         """Record a fill. Returns False if this client_order_id was already recorded (idempotent)."""
         if side not in ("buy", "sell"):
             raise LedgerError("side must be buy or sell")
-        if qty <= 0 or price <= 0 or fee < 0:
-            raise LedgerError("qty and price must be positive; fee non-negative")
+        if qty <= 0 or price < 0 or fee < 0:
+            raise LedgerError("qty must be positive; price and fee non-negative")
+        if price == 0 and not (side == "sell" and source == "settlement"):
+            raise LedgerError("zero price is only valid for a settlement payout of a losing contract")
         if self.conn.execute(
             "SELECT 1 FROM fills WHERE engine=? AND client_order_id=?", (engine, client_order_id)
         ).fetchone():

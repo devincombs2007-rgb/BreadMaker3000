@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS fills (
     symbol TEXT NOT NULL,
     side TEXT NOT NULL CHECK (side IN ('buy','sell')),
     qty REAL NOT NULL CHECK (qty > 0),
-    price REAL NOT NULL CHECK (price > 0),
+    price REAL NOT NULL CHECK (price >= 0),
     fee REAL NOT NULL DEFAULT 0,
     client_order_id TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT 'paper',
@@ -68,6 +68,36 @@ CREATE TABLE IF NOT EXISTS experiments (
     n_oos_obs INTEGER NOT NULL,
     status TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS evidence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fetched_at TEXT NOT NULL,
+    source TEXT NOT NULL,
+    url TEXT NOT NULL,
+    params TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    summary TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    issued_at TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    event_ticker TEXT NOT NULL,
+    series_ticker TEXT NOT NULL,
+    category TEXT NOT NULL,
+    model TEXT NOT NULL,
+    p REAL,
+    p_low REAL,
+    p_high REAL,
+    status TEXT NOT NULL,              -- 'forecast' | 'rejected'
+    reason TEXT NOT NULL DEFAULT '',
+    yes_bid REAL, yes_ask REAL, no_ask REAL,
+    evidence_ids TEXT NOT NULL DEFAULT '[]',
+    decision TEXT NOT NULL DEFAULT '{}',
+    close_time TEXT,
+    outcome INTEGER,                   -- 1 yes / 0 no once settled
+    settled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS predictions_ticker ON predictions(ticker);
 CREATE TABLE IF NOT EXISTS models (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,

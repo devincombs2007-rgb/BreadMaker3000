@@ -17,10 +17,14 @@ jobs:
         with: {python-version: "3.12"}
       - name: Install pinned core deps
         run: pip install -r requirements/core.lock pytest && pip install --no-deps -e .
-      - name: Unit tests (incl. credential-leak and risk-audit tests)
+      - name: Unit tests (Kalshi client/pricing/models/decisions/paper/tracking with SYNTHETIC fixtures)
         run: pytest -q
-      - name: Safety check (no live trading paths, no secrets)
+      - name: Safety check (no real-money or Kalshi order/signing code, no secrets)
         run: breadmaker safety-check
+      - name: Kalshi access is OFF in the committed configuration
+        run: |
+          breadmaker kalshi-status | tee status.json
+          python -c "import json,sys; sys.exit(0 if json.load(open('status.json'))['kalshi_api_allowed'] is False else 1)"
 
   secret-scan:
     runs-on: ubuntu-24.04
@@ -30,79 +34,25 @@ jobs:
       - name: gitleaks (full history)
         run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 git /repo --no-banner --redact
 
-  freqtrade-smoke:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
-      - name: Install Freqtrade (pinned) + FreqAI extras
-        run: pip install "freqtrade[freqai]==2026.10" pyyaml pytest
-      - name: Risk gate enforced inside real Freqtrade (fail-closed through upstream fail-open wrapper)
-        run: pytest -q -p no:cacheprovider engines/freqtrade/tests/test_gate_integration.py
-      - name: Real Freqtrade backtest engine, synthetic data (baseline)
-        run: python engines/freqtrade/tests/offline_smoke_backtest.py .
-      - name: Real Freqtrade backtest engine, synthetic data (FreqAI LightGBM)
-        run: python engines/freqtrade/tests/offline_smoke_backtest.py . --freqai
-
-  lumibot-smoke:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
-      - run: pip install -r requirements/lumibot.lock pytest
-      - name: Fill booking + broker reconciliation (real LumiBot objects)
-        run: BREADMAKER_DATA_DIR=$RUNNER_TEMP/lbt pytest -q -p no:cacheprovider engines/lumibot/tests/test_fill_booking.py
-      - name: Real LumiBot backtest engine, synthetic data
-        run: BREADMAKER_DATA_DIR=$RUNNER_TEMP/lb python engines/lumibot/tests/offline_smoke_backtest.py .
-
   docker-build:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: cp .env.example .env && docker compose config -q
       - run: docker build -f docker/core.Dockerfile -t breadmaker/core:ci .
-      - run: docker build -f docker/lumibot.Dockerfile -t breadmaker/lumibot:ci .
 
-  # Native ARM64 (same CPU architecture as Oracle Ampere A1 / most free ARM hosts).
   arm64:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - name: Runner architecture
-        run: uname -m && test "$(uname -m)" = "aarch64"
-      - name: Core unit tests on arm64 (pinned lockfile resolves to arm64 wheels)
+      - run: uname -m && test "$(uname -m)" = "aarch64"
+      - name: Unit tests on arm64
         run: pip install -r requirements/core.lock pytest && pip install --no-deps -e . && pytest -q
-      - name: Build core + lumibot images natively for linux/arm64
+      - name: Core image builds and runs natively on arm64
         run: |
-          cp .env.example .env
           docker build -f docker/core.Dockerfile -t breadmaker/core:arm64 .
-          docker build -f docker/lumibot.Dockerfile -t breadmaker/lumibot:arm64 .
-          for i in core lumibot; do
-            arch=$(docker image inspect --format '{{.Architecture}}' breadmaker/$i:arm64); echo "$i -> $arch"
-            test "$arch" = "arm64"
-          done
-      - name: Core image runs on arm64 (CLI + safety check + dashboard import)
-        run: |
-          docker run --rm --entrypoint breadmaker breadmaker/core:arm64 --help
-          docker run --rm -e DASHBOARD_SECRET_KEY=$(openssl rand -hex 32) --entrypoint python breadmaker/core:arm64 \
-            -c "import lightgbm, sklearn, pyarrow; from breadmaker.dashboard.app import create_app; print('core arm64 imports ok')"
-      - name: LumiBot image on arm64 runs the real LumiBot backtest + fill tests
-        run: |
-          docker run --rm -u 0 -v "$PWD:/repo" -w /repo -e BREADMAKER_DATA_DIR=/tmp/lb --entrypoint sh breadmaker/lumibot:arm64 -c \
-            "pip install -q pytest && python -m pytest -q -p no:cacheprovider engines/lumibot/tests/test_fill_booking.py \
-             && python engines/lumibot/tests/offline_smoke_backtest.py /repo"
-      - name: Official Freqtrade 2026.10 arm64 image runs our strategies, gate tests and backtests
-        run: |
-          # run as the image's own user (ftuser): Freqtrade lives in that user's site-packages
-          docker run --rm -v "$PWD:/repo:ro" -w /repo --entrypoint bash freqtradeorg/freqtrade:2026.10 -c \
-            "uname -m && pip install -q --user pytest pyyaml && python -m pytest -q -p no:cacheprovider engines/freqtrade/tests/test_gate_integration.py -k 'not BreadFreqAIV1' \
-             && python engines/freqtrade/tests/offline_smoke_backtest.py /repo"
-      - name: Official FreqAI arm64 image runs the LightGBM challenger backtest
-        run: |
-          docker run --rm -v "$PWD:/repo:ro" -w /repo --entrypoint bash freqtradeorg/freqtrade:2026.10_freqai -c \
-            "pip install -q --user pyyaml && python engines/freqtrade/tests/offline_smoke_backtest.py /repo --freqai"
+          test "$(docker image inspect --format '{{.Architecture}}' breadmaker/core:arm64)" = "arm64"
+          docker run --rm --entrypoint breadmaker breadmaker/core:arm64 kalshi-status

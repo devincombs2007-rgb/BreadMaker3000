@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 from breadmaker.dashboard.app import create_app, hash_password, verify_password
 from breadmaker.db import connect
 from breadmaker.ledger import Ledger
-from breadmaker.orchestrator.freqtrade_sentinel import mirror_trades, run_once
 from breadmaker.orchestrator.heartbeat import beat, worker_status
 from breadmaker.orchestrator.market_hours import is_market_open, is_trading_day, nyse_holidays
 from breadmaker.reports.generate import build_report
@@ -31,78 +30,6 @@ def test_market_open_rules():
     assert not is_market_open(datetime(2026, 11, 27, 19, 0, tzinfo=timezone.utc))  # early close 13:00 ET
     assert not is_market_open(datetime(2026, 11, 28, 15, 0, tzinfo=timezone.utc))  # Saturday
     assert not is_trading_day(date(2026, 4, 3))                                       # Good Friday
-
-
-# ---- sentinel ---------------------------------------------------------------
-class FakeFT:
-    def __init__(self, dry_run=True, equity_rate=100.0):
-        self.dry_run, self.rate, self.stopped = dry_run, equity_rate, 0
-
-    def ping(self):
-        return True
-
-    def show_config(self):
-        return {"dry_run": self.dry_run, "trading_mode": "spot", "state": "running"}
-
-    def trades(self, limit=500, offset=0):
-        if offset:
-            return {"trades": []}
-        return {"trades": [
-            {"trade_id": 1, "pair": "BTC/USD", "amount": 1.0, "open_rate": 100.0, "fee_open_cost": 0.4,
-             "is_open": False, "close_rate": 105.0, "fee_close_cost": 0.42, "open_timestamp": 1, "close_timestamp": 2,
-             "open_date": "2026-01-01 00:00:00", "close_date": "2026-01-01 05:00:00"},
-            {"trade_id": 2, "pair": "ETH/USD", "amount": 0.5, "open_rate": 100.0, "fee_open_cost": 0.2,
-             "is_open": True, "open_timestamp": 3, "open_date": "2026-01-01 06:00:00"}]}
-
-    def status(self):
-        return [{"trade_id": 2, "pair": "ETH/USD", "amount": 0.5, "open_rate": 100.0, "fee_open_cost": 0.2,
-                 "is_open": True, "open_timestamp": 3, "open_date": "2026-01-01 06:00:00", "current_rate": self.rate}]
-
-    def stopentry(self):
-        self.stopped += 1
-        return {}
-
-
-@pytest.fixture
-def risk(conn, tmp_path, tmp_settings):
-    Ledger(conn).ensure_portfolio("freqtrade", "crypto", 1000)
-    return RiskEngine(tmp_settings.risk, KillSwitch(tmp_path / "KILL"), conn)
-
-
-def test_sentinel_mirrors_and_is_idempotent(conn, risk):
-    ft = FakeFT()
-    r = run_once(ft, conn, risk, {})
-    assert r["ok"] and not r["breaches"]
-    run_once(ft, conn, risk, {})
-    L = Ledger(conn)
-    assert len(L.fills("freqtrade")) == 3
-    s = L.summary("freqtrade", {"ETH/USD": 100.0})
-    assert s["realized_pnl_net_of_fees"] == pytest.approx(5 - 0.82 - 0.2)
-
-
-def test_sentinel_kills_on_live_mode(conn, risk):
-    ft = FakeFT(dry_run=False)
-    r = run_once(ft, conn, risk, {})
-    assert r.get("fatal") and risk.kill_switch.engaged() and ft.stopped == 1
-
-
-def test_sentinel_drawdown_halts(conn, risk):
-    ft = FakeFT(equity_rate=100.0)
-    st = {"peak": 1100.0}
-    r = run_once(ft, conn, risk, st)
-    assert any("drawdown" in b for b in r["breaches"]) and r["halted"] and ft.stopped >= 1
-    assert risk.halts.active("freqtrade", datetime.now(timezone.utc))["kind"] == "drawdown"
-
-
-def test_mirror_orders_exit_before_entry(conn):
-    L = Ledger(conn)
-    L.ensure_portfolio("freqtrade", "crypto", 100)
-    trades = [
-        {"trade_id": 2, "pair": "B", "amount": 0.9, "open_rate": 100, "is_open": True, "open_timestamp": 10},
-        {"trade_id": 1, "pair": "A", "amount": 0.9, "open_rate": 100, "is_open": False, "close_rate": 101,
-         "open_timestamp": 1, "close_timestamp": 5},
-    ]
-    assert mirror_trades(L, trades) == 3
 
 
 # ---- heartbeats / reports -----------------------------------------------------
@@ -176,7 +103,7 @@ def test_security_headers(client):
     assert h["x-frame-options"] == "DENY" and "frame-ancestors 'none'" in h["content-security-policy"]
 
 
-# ---- first-run setup + Alpaca settings ------------------------------------------
+# ---- first-run setup ------------------------------------------------------------
 @pytest.fixture
 def fresh_client(tmp_settings, monkeypatch):
     monkeypatch.delenv("DASHBOARD_PASSWORD_HASH", raising=False)
@@ -199,21 +126,3 @@ def test_first_run_setup_then_locked(fresh_client):
     assert c.get("/setup", follow_redirects=False).headers["location"] == "/login"
 
 
-def test_alpaca_settings_paper_only_and_never_returned(fresh_client, tmp_settings):
-    from breadmaker.secrets_store import SecretsStore
-    c = fresh_client
-    c.post("/setup", data={"password": PW, "password2": PW})
-    csrf = c.get("/").text.split('const CSRF="')[1].split('"')[0]
-    h = {"X-BM-CSRF": csrf}
-    assert c.get("/api/settings/alpaca").json() == {"configured": False}
-    live = {"key": "AK" + "X" * 18, "secret": "s" * 40, "password": PW}
-    assert c.post("/api/settings/alpaca", headers=h, data=live).status_code == 400
-    paper = {"key": "PK" + "ABCDEFGH12345678WXYZ", "secret": "s" * 40, "password": PW}
-    assert c.post("/api/settings/alpaca", headers=h, data={**paper, "password": "wrong"}).status_code == 403
-    r = c.post("/api/settings/alpaca", headers=h, data=paper)
-    assert r.status_code == 200 and r.json() == {"configured": True, "key_hint": "PK…WXYZ"}
-    assert "s" * 40 not in c.get("/api/settings/alpaca").text
-    store = SecretsStore(tmp_settings.data_dir)
-    assert store.alpaca()[0].startswith("PK")
-    import os, stat
-    assert stat.S_IMODE(os.stat(store.dir / "alpaca.json").st_mode) == 0o600

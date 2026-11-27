@@ -2,17 +2,16 @@
 
 Lets an iPhone-only owner finish setup in the dashboard instead of a terminal:
 * dashboard password hash (set once on first visit; reset requires server access),
-* session signing key (auto-generated),
-* Alpaca PAPER keys (validated to be paper keys; never returned by any API).
+* session signing key (auto-generated).
+No exchange or broker credentials are stored: Kalshi public market data needs none, and this
+codebase contains no authenticated or order-placing Kalshi code.
 """
 from __future__ import annotations
 
-import json
 import os
 import secrets
 from pathlib import Path
 
-from .config import SafetyError, assert_alpaca_key_looks_paper
 
 
 class SecretsStore:
@@ -66,26 +65,3 @@ class SecretsStore:
             return existing
         self._write_new("session_key", secrets.token_hex(32))
         return self._read("session_key") or ""
-
-    # ---- alpaca ------------------------------------------------------------
-    def save_alpaca(self, key: str, secret: str) -> None:
-        key, secret = key.strip(), secret.strip()
-        assert_alpaca_key_looks_paper(key)
-        if not key.upper().startswith("PK") or len(key) < 16 or len(secret) < 20:
-            raise SafetyError("Alpaca PAPER key IDs start with 'PK'; check both values were copied fully.")
-        self._replace("alpaca.json", json.dumps({"key": key, "secret": secret}))
-
-    def alpaca(self) -> tuple[str, str] | None:
-        if os.environ.get("ALPACA_API_KEY") and os.environ.get("ALPACA_API_SECRET"):
-            return os.environ["ALPACA_API_KEY"], os.environ["ALPACA_API_SECRET"]
-        raw = self._read("alpaca.json")
-        if not raw:
-            return None
-        d = json.loads(raw)
-        return d["key"], d["secret"]
-
-    def alpaca_status(self) -> dict:
-        creds = self.alpaca()
-        if not creds:
-            return {"configured": False}
-        return {"configured": True, "key_hint": f"{creds[0][:2]}…{creds[0][-4:]}"}

@@ -38,7 +38,7 @@ td.r,th.r{text-align:right}svg{width:100%;height:60px;display:block;margin-top:8
 <h2>Workers &amp; system</h2><div class="card" id="workers"></div>
 <h2>Risk events</h2><div class="card" id="events"></div>
 <h2>Models &amp; strategy rankings</h2><div class="card" id="models"></div>
-<h2>Settings</h2><div class="card" id="alpaca"></div>
+<h2>Prediction markets (simulated)</h2><div class="card" id="kalshi"></div>
 <form method="post" action="/logout"><button class="ghost" type="submit">Sign out</button></form>
 
 <script>
@@ -108,24 +108,28 @@ async function load(){
   $("engines").innerHTML=d.engines.map(engineCard).join("")||'<div class="card mute">No engines registered yet.</div>';
   $("workers").innerHTML=(d.workers.map(w=>`<div class="row"><span>${esc(w.worker)}</span><span class="${w.status==="running"?"ok":w.status==="stale"?"stale":"bad"}">${esc(w.status)} · ${w.age_seconds}s</span></div><div class="mute">${esc(w.detail)}</div>`).join("")||'<div class="mute">No heartbeats yet.</div>')
     +`<div class="row" style="margin-top:8px"><span class="mute">CPU ${d.system.cpu_pct}% · RAM ${d.system.mem_pct}%</span><span class="mute">Up ${(d.system.uptime_s/86400).toFixed(1)}d</span></div>`;
+  $("kalshi").innerHTML=kalshiCard(d.kalshi);
   $("events").innerHTML=d.risk_events.map(e=>`<div class="ev"><span class="${e.severity==="critical"?"bad":"stale"}">${esc(e.severity)}</span> ${esc(e.ts)} [${esc(e.engine)}] <b>${esc(e.rule)}</b> ${esc(e.detail)}</div>`).join("")||'<div class="mute">No risk events.</div>';
   const m=d.models.map(x=>`<div class="row"><span>${esc(x.family)} ${esc(x.version)}</span><span class="pill">${esc(x.role)}</span></div>`).join("");
   const s=d.strategy_rankings.map(x=>`<tr><td>${esc(x.name)}</td><td class="mute">${esc(x.params)}</td><td class="r num">${f2(x.oos_sharpe)}</td></tr>`).join("");
   $("models").innerHTML=(m||'<div class="mute">No models registered.</div>')+(s?`<h2>Top out-of-sample (research, not live)</h2><table><tr><th>Strategy</th><th>Params</th><th class="r">OOS Sharpe</th></tr>${s}</table>`:"");
 }
-async function loadAlpaca(){
-  const r=await fetch("/api/settings/alpaca"); if(!r.ok)return; const a=await r.json();
-  $("alpaca").innerHTML=`<div class="row"><b>Alpaca paper keys</b><span class="${a.configured?"ok":"stale"}">${a.configured?"Saved "+esc(a.key_hint):"Not set"}</span></div>
-   <div class="mute" style="margin:6px 0 10px">Paper keys only (start with PK). Stored on your server, never shown again.</div>
-   <form id="alp">
-    <input name="key" placeholder="API Key ID (PK...)" autocapitalize="characters" autocomplete="off" required class="inp">
-    <input name="secret" type="password" placeholder="Secret Key" autocomplete="off" required class="inp">
-    <input name="password" type="password" placeholder="Your dashboard password" autocomplete="current-password" required class="inp">
-    <button class="ghost">Save keys</button></form>`;
-  $("alp").onsubmit=async e=>{e.preventDefault();
-    const r=await fetch("/api/settings/alpaca",{method:"POST",headers:{"X-BM-CSRF":CSRF},body:new FormData(e.target)});
-    alert(r.ok?"Saved. The stock engine starts within a minute.":"Not saved: "+((await r.json()).detail||r.status)); loadAlpaca();};
+function kalshiCard(k){
+  if(!k)return "";
+  const a=k.api_access, pc=k.predictions||{};
+  const rej=(k.top_rejection_reasons||[]).map(r=>`<div class="ev">${esc(r.n)} × ${esc(r.reason)}</div>`).join("");
+  const rec=(k.recent||[]).map(r=>`<tr><td>${esc(r.ticker)}</td><td class="r num">${f2(r.p)}</td><td class="r num">${r.yes_ask==null?"–":f2(r.yes_ask)}</td><td>${esc(r.action)}</td></tr>`).join("");
+  const sm=Object.entries(k.settled_metrics||{}).map(([m,v])=>`<div class="row"><span>${esc(m)}</span><span class="num">n=${v.n} · Brier ${f2(v.brier)}</span></div>`).join("");
+  const val=k.validation?Object.entries(k.validation.weather||{}).map(([s,v])=>`<div class="row"><span>${esc(s)}</span><span class="num">Brier ${v.brier==null?"–":Number(v.brier).toFixed(3)} · skill ${v.skill_vs_gaussian==null?"–":Number(v.skill_vs_gaussian).toFixed(3)}</span></div>`).join(""):"";
+  return `<div class="row"><b>Kalshi API</b><span class="${a.allowed?"ok":"stale"}">${a.allowed?"enabled (read-only)":"OFF"}</span></div>
+   <div class="mute" style="margin:4px 0 8px">${esc(a.reason)}</div>
+   <div class="grid"><div><span>Bankroll</span><span class="num">${usd(k.bankroll)}</span></div><div><span>Forecasts</span><span class="num">${pc.forecast||0}</span></div>
+   <div><span>Rejected</span><span class="num">${pc.rejected||0}</span></div><div><span>Settled scored</span><span class="num">${Object.values(k.settled_metrics||{}).reduce((s,v)=>s+v.n,0)}</span></div></div>
+   ${sm?`<h2>Accuracy (settled)</h2>${sm}`:""}
+   ${val?`<h2>Model validation (real data, out-of-sample)</h2>${val}`:""}
+   ${rec?`<h2>Recent forecasts</h2><table><tr><th>Market</th><th class="r">P</th><th class="r">Ask</th><th>Action</th></tr>${rec}</table>`:""}
+   ${rej?`<h2>Why markets were rejected</h2>${rej}`:""}`;
 }
-load();loadAlpaca();setInterval(load,30000);
+load();setInterval(load,30000);
 </script>
 </body></html>
