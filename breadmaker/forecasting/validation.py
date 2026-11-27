@@ -190,12 +190,13 @@ def _tournament_lines(t: dict) -> list[str]:
 
 def render(r: dict) -> str:
     """Phone-friendly Markdown (short lists, no wide tables)."""
+    from .licences import REGISTRY, accepted_by_owner, allowed
     L = ["# Forecast validation (real public data, out-of-sample)", "",
          f"_{r['generated_at']}. No Kalshi data. Lower Brier is better. 95% intervals use a block bootstrap; "
          "'better' requires the whole interval below zero._", "",
-         "Data: Open-Meteo (CC BY 4.0); NWS climate reports via Iowa Environmental Mesonet; public crypto prices; "
-         "BLS; nflverse; FiveThirtyEight (CC BY 4.0). The information used here was obtained free of charge from "
-         "and is copyrighted by Retrosheet. Interested parties may contact Retrosheet at www.retrosheet.org.", "",
+         "Data: " + " · ".join(d.attribution for d in REGISTRY.values() if d.attribution and allowed(d.key)), "",
+         ("Owner-accepted (unverified) terms: " + ", ".join(sorted(accepted_by_owner()))) if accepted_by_owner()
+         else "Only datasets with verified licences were used (breadmaker/forecasting/licences.py).", "",
          "## Weather: P(high ≥ k)"]
     for st, w in r.get("weather", {}).items():
         if not w.get("n_predictions"):

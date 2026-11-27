@@ -141,3 +141,122 @@ def test_rankings_orders_allocations_candidates_and_rejections(conn):
     assert rk["rejections"][0]["count"] == 2
     md = rankings_markdown(rk)
     assert "BUY 3 YES" in md and "2 ×" in md and "|" not in md   # phone-friendly: no tables
+
+
+# ---- alerts when the health report is missing / the job failed ------------------------------------
+def test_missing_health_report_is_an_error_finding(tmp_path):
+    f = health.load_findings(str(tmp_path / "never_written.json"), "failure", "daily-research")
+    assert health.worst(f) == "error"
+    assert {x["check"] for x in f} == {"health-report", "workflow"}
+
+
+def test_ok_report_but_failed_job_still_alerts(tmp_path):
+    p = tmp_path / "h.json"
+    p.write_text('[{"severity": "ok", "check": "ci", "detail": "x"}]')
+    assert health.worst(health.load_findings(str(p), "success")) == "ok"
+    assert health.worst(health.load_findings(str(p), "failure")) == "error"
+    p.write_text("[]")
+    assert health.worst(health.load_findings(str(p), "success")) == "error"      # empty report is not "healthy"
+
+
+def test_no_report_workflows_alert_on_status_only():
+    assert health.worst(health.load_findings("-", "success", "kalshi-paper")) == "ok"
+    assert health.worst(health.load_findings("-", "cancelled", "kalshi-paper")) == "error"
+
+
+def test_alert_issues_are_per_workflow():
+    seen = []
+
+    def handler(req):
+        if req.method == "GET":     # daily-research's alert is open
+            return httpx.Response(200, json=[{"number": 9, "title": health.ALERT_TITLE}])
+        seen.append((req.method, req.url.path, req.content))
+        return httpx.Response(201, json={})
+    ok = [{"severity": "ok", "check": "workflow", "detail": "x"}]
+    # a healthy kalshi-paper run must NOT close daily-research's alert
+    assert health.alert("o/r", "t", ok, transport=httpx.MockTransport(handler), workflow="kalshi-paper") == "none"
+    bad = [{"severity": "error", "check": "workflow", "detail": "x"}]
+    assert health.alert("o/r", "t", bad, transport=httpx.MockTransport(handler), workflow="kalshi-paper") == "opened"
+    assert b"BreadMaker health alert (kalshi-paper)" in seen[-1][2]
+
+
+def test_health_main_writes_posted_output(tmp_path, monkeypatch):
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("GITHUB_REPOSITORY", "o/r")
+    monkeypatch.setenv("GH_TOKEN", "t")
+    monkeypatch.setattr(health, "alert", lambda *a, **k: "opened")
+    assert health.main(["alert", str(tmp_path / "missing.json"), "u", "failure", "daily-research"]) == 1
+    assert "posted=true" in out.read_text()
+
+
+# ---- first-release economic log -----------------------------------------------------------------------
+def test_econ_log_records_first_release_and_revisions(tmp_path):
+    import pandas as pd
+    con = forward.connect(tmp_path / "f.sqlite")
+    s1 = {"CUSR0000SA0": pd.Series({pd.Timestamp("2026-09-01"): 320.0})}
+    r = forward.record_econ(con, s1, NOW)                  # first run: already-published months are BACKFILLED
+    assert r["new_periods"] == 1 and r["first_releases_tracked"] == 0
+    s2 = {"CUSR0000SA0": pd.Series({pd.Timestamp("2026-09-01"): 320.0, pd.Timestamp("2026-10-01"): 321.0})}
+    r = forward.record_econ(con, s2, NOW + timedelta(days=30))
+    assert r["new_periods"] == 1 and r["first_releases_tracked"] == 1   # October seen at release: a true first release
+    s3 = {"CUSR0000SA0": pd.Series({pd.Timestamp("2026-09-01"): 320.0, pd.Timestamp("2026-10-01"): 321.4})}
+    r = forward.record_econ(con, s3, NOW + timedelta(days=60))
+    assert r["revisions_seen"] == 1
+    rows = con.execute("SELECT value FROM econ_obs WHERE period='2026-10' ORDER BY id").fetchall()
+    assert [x[0] for x in rows] == [321.0, 321.4]           # first release kept; revision appended, never overwritten
+    forward.record_econ(con, s3, NOW + timedelta(days=61))
+    assert con.execute("SELECT COUNT(*) FROM econ_obs").fetchone()[0] == 3   # unchanged values are not duplicated
+
+
+# ---- private-repo Actions usage + workflow cost rules (PR #3 review finding 9) -------------------------
+def test_actions_usage_warns_before_the_free_allowance_runs_out():
+    def handler(req):
+        if req.url.path.endswith("/actions/runs"):
+            return httpx.Response(200, json={"workflow_runs": [{"id": i} for i in range(3)]})
+        if req.url.path.endswith("/timing"):
+            return httpx.Response(200, json={"billable": {"UBUNTU": {"total_ms": 600 * 60000}}})
+        return httpx.Response(404)
+    c = httpx.Client(base_url="https://api.github.com", transport=httpx.MockTransport(handler))
+    f = health.actions_usage(c, "o/r", NOW)
+    assert f["severity"] == "error" and "1800 of 2000" in f["detail"]        # 90% >= 85% -> error
+    assert health.actions_usage(c, "o/r", NOW, max_runs=2)["severity"] == "warning"   # 60%
+    assert health.actions_usage(c, "o/r", NOW, max_runs=1)["severity"] == "ok"        # 30%
+
+
+def test_private_repo_health_includes_minutes():
+    routes = healthy_routes()
+    routes["/repos/o/r"] = {"private": True}
+    routes["/actions/runs"] = {"workflow_runs": []}
+    f = health.check("o/r", "t", NOW, transport=gh(routes))
+    assert any(x["check"] == "actions-minutes" for x in f)
+
+
+def _workflows():
+    import yaml
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+    return {p.stem: yaml.safe_load(p.read_text()) for p in root.glob("*.yml")}
+
+
+def test_every_job_has_a_timeout():
+    for name, wf in _workflows().items():
+        for job, spec in wf["jobs"].items():
+            assert 0 < spec.get("timeout-minutes", 0) <= 30, f"{name}.{job} has no (or too long a) timeout"
+
+
+def test_disabled_kalshi_workflows_start_no_runner_and_refuse_public_repos():
+    wfs = _workflows()
+    for name, var in (("kalshi-paper", "KALSHI_API_ENABLED"), ("kalshi-demo", "KALSHI_DEMO_ENABLED")):
+        jobs = wfs[name]["jobs"]
+        assert list(jobs) == ["cycle"]                                         # no always-billed guard job
+        assert jobs["cycle"]["if"] == f"vars.{var} == 'true'"
+        first = jobs["cycle"]["steps"][0]
+        assert "private" in first["run"] and "exit 1" in first["run"]
+
+
+def test_ci_does_not_double_run_and_cancels_superseded_runs():
+    ci = _workflows()["ci"]
+    on = ci.get("on", ci.get(True))
+    assert on["push"]["branches"] == ["main"] and "pull_request" in on
+    assert ci["concurrency"]["cancel-in-progress"] is True

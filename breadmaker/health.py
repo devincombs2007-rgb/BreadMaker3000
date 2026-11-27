@@ -17,6 +17,41 @@ def _age(ts: str | None, now: datetime) -> timedelta | None:
     return now - datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
+INCLUDED_MINUTES = 2000   # GitHub Free: private-repo Actions minutes per month (whole account)
+
+
+def actions_usage(gh: httpx.Client, repo: str, now: datetime, max_runs: int = 300) -> dict:
+    """Billable minutes THIS repository used this month (private repos only; public repos are free).
+
+    Sums each run's billable time (GET /actions/runs/{id}/timing). The free allowance is shared by
+    all of the account's private repositories, so this is a lower bound on account usage. Charges
+    are only possible if the owner has added a payment method AND set a budget above $0; with no
+    budget, GitHub stops the workflows instead (see HOSTING.md)."""
+    import os
+    included = int(os.environ.get("ACTIONS_INCLUDED_MINUTES", INCLUDED_MINUTES))
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    total_ms, page, seen = 0, 1, 0
+    while seen < max_runs:
+        r = gh.get(f"/repos/{repo}/actions/runs",
+                   params={"created": f">={start:%Y-%m-%d}", "per_page": 100, "page": page})
+        r.raise_for_status()
+        runs = r.json().get("workflow_runs", [])
+        for run in runs[: max_runs - seen]:
+            t = gh.get(f"/repos/{repo}/actions/runs/{run['id']}/timing")
+            if t.status_code == 200:
+                total_ms += sum(int(v.get("total_ms", 0)) for v in (t.json().get("billable") or {}).values())
+            seen += 1
+        if len(runs) < 100:
+            break
+        page += 1
+    minutes = total_ms / 60000
+    share = minutes / included if included else 0
+    sev = "error" if share >= 0.85 else "warning" if share >= 0.6 else "ok"
+    return {"severity": sev, "check": "actions-minutes",
+            "detail": f"this repo used ~{minutes:.0f} of {included} included private-repo minutes this month "
+                      f"({share:.0%}; {seen} runs counted). At the limit GitHub stops workflows unless a paid budget is set."}
+
+
 def check(repo: str, token: str, now: datetime | None = None, transport: httpx.BaseTransport | None = None,
           default_branch: str = "main") -> list[dict]:
     now = now or datetime.now(timezone.utc)
@@ -71,6 +106,8 @@ def check(repo: str, token: str, now: datetime | None = None, transport: httpx.B
         private = info.json().get("private")
         add("ok", "visibility", "repository is private" if private else
             "repository is public: Kalshi/Demo cycles are refused by design (no Kalshi data may be shared)")
+        if private:
+            findings.append(actions_usage(gh, repo, now))
     except httpx.HTTPError as exc:
         add("error", "github-api", f"health check could not query GitHub: {exc}")
     return findings
@@ -89,22 +126,28 @@ def worst(findings: list[dict]) -> str:
 ALERT_TITLE = "BreadMaker health alert"
 
 
+def alert_title(workflow: str = "") -> str:
+    # One rolling issue PER workflow, so a healthy run of one workflow never closes another's alert.
+    return ALERT_TITLE if workflow in ("", "daily-research") else f"{ALERT_TITLE} ({workflow})"
+
+
 def alert(repo: str, token: str, findings: list[dict], report_url: str = "",
-          transport: httpx.BaseTransport | None = None) -> str:
+          transport: httpx.BaseTransport | None = None, workflow: str = "") -> str:
     """One rolling issue: open/comment when something is wrong, close when healthy. Returns action taken."""
+    title = alert_title(workflow)
     gh = httpx.Client(base_url="https://api.github.com", transport=transport, timeout=30,
                       headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
     r = gh.get(f"/repos/{repo}/issues", params={"state": "open", "per_page": 100})
     r.raise_for_status()
-    existing = next((i for i in r.json() if i.get("title") == ALERT_TITLE and "pull_request" not in i), None)
+    existing = next((i for i in r.json() if i.get("title") == title and "pull_request" not in i), None)
     bad = [f for f in findings if f["severity"] != "ok"]
-    body = markdown(findings) + (f"\n[Daily report run]({report_url})\n" if report_url else "") + \
-        "\n_Automated by the daily-research workflow (simulation only)._"
+    body = markdown(findings) + (f"\n[Workflow run]({report_url})\n" if report_url else "") + \
+        f"\n_Automated by the {workflow or 'daily-research'} workflow (simulation only)._"
     if bad and existing:
         gh.post(f"/repos/{repo}/issues/{existing['number']}/comments", json={"body": body}).raise_for_status()
         return "commented"
     if bad:
-        gh.post(f"/repos/{repo}/issues", json={"title": ALERT_TITLE, "body": body}).raise_for_status()
+        gh.post(f"/repos/{repo}/issues", json={"title": title, "body": body}).raise_for_status()
         return "opened"
     if existing:
         gh.post(f"/repos/{repo}/issues/{existing['number']}/comments",
@@ -114,21 +157,47 @@ def alert(repo: str, token: str, findings: list[dict], report_url: str = "",
     return "none"
 
 
-def main(argv=None) -> int:
-    """python -m breadmaker.health alert <findings.json> [report_url]"""
+def load_findings(path: str, job_status: str = "success", workflow: str = "") -> list[dict]:
+    """Findings for the alert. Never 'nothing to report' just because the report is missing:
+    a missing/unreadable health file, or a failed job, is itself an error finding.
+    path '-' means this workflow produces no health report; only its job status counts."""
     import json
+    name = workflow or "workflow"
+    if path == "-":
+        findings = [{"severity": "ok", "check": "workflow", "detail": f"{name} completed"}]
+    else:
+        try:
+            with open(path) as fh:
+                findings = json.loads(fh.read() or "[]")
+            if not isinstance(findings, list) or not findings:
+                raise ValueError("health report is empty or not a list")
+        except (OSError, ValueError) as exc:
+            findings = [{"severity": "error", "check": "health-report",
+                         "detail": f"{name} produced no readable health report ({type(exc).__name__}); "
+                                   "it failed before the health check ran"}]
+    if job_status != "success":
+        findings = [f for f in findings if f["check"] != "workflow"] + [
+            {"severity": "error", "check": "workflow",
+             "detail": f"{name} job status: {job_status or 'unknown'} (a step failed or was cancelled)"}]
+    return findings
+
+
+def main(argv=None) -> int:
+    """python -m breadmaker.health alert <findings.json> [report_url] [job_status] [workflow_name]"""
     import os
     import sys
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) < 2 or args[0] != "alert":
-        print("usage: python -m breadmaker.health alert <findings.json> [report_url]")
+        print("usage: python -m breadmaker.health alert <findings.json> [report_url] [job_status] [workflow_name]")
         return 2
-    findings = json.loads(open(args[1]).read() or "[]")
-    if not findings:
-        print("no findings (health check not run)")
-        return 0
-    action = alert(os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"], findings, args[2] if len(args) > 2 else "")
+    url = args[2] if len(args) > 2 else ""
+    findings = load_findings(args[1], args[3] if len(args) > 3 else "success", args[4] if len(args) > 4 else "")
+    workflow = args[4] if len(args) > 4 else ""
+    action = alert(os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"], findings, url, workflow=workflow)
     print(f"health alert: {action}; worst severity: {worst(findings)}")
+    if os.environ.get("GITHUB_OUTPUT"):          # tells the workflow's fallback alert step it is not needed
+        with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+            fh.write("posted=true\n")
     return 1 if worst(findings) == "error" else 0
 
 

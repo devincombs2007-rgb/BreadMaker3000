@@ -191,8 +191,14 @@ def _crypto(m: Market, ev: EvidenceStore, cache: dict, now: datetime):
             ts = sorted(closes)
             eid = ev.record_provenance(prov, {"hours": len(ts), "last_ms": ts[-1]})
             cache[base] = (closes[ts[-1]], np.diff(np.log([closes[t] for t in ts])), [eid])
-        except Exception:  # noqa: BLE001
-            cache[base] = (None, np.array([]), [])
+        except Exception as exc:  # noqa: BLE001
+            from ..forecasting.licences import LicenceUnverified
+            if isinstance(exc, LicenceUnverified):
+                cache[base] = ("licence", str(exc)[:200])
+            else:
+                cache[base] = (None, np.array([]), [])
+    if cache[base][0] == "licence":
+        return Rejection("crypto_price", f"data terms unverified: {cache[base][1]}")
     spot, lr, ids = cache[base]
     if m.close_time is None:
         return Rejection("crypto_price", "no close time")

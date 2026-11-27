@@ -31,6 +31,8 @@ def fetch_bls(series: list[str], start_year: int, end_year: int) -> tuple[dict[s
     for a in range(start_year, end_year + 1, 10):  # v1: <= 10 years per request
         b = min(a + 9, end_year)
         body = {"seriesid": series, "startyear": str(a), "endyear": str(b)}
+        from .licences import require_url
+        require_url(BLS_V1)
         r = httpx.post(BLS_V1, json=body, timeout=60, headers={"User-Agent": "breadmaker3000-research/0.4"})
         r.raise_for_status()
         js = r.json()

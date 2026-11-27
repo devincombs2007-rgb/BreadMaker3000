@@ -1,18 +1,18 @@
 """Sports game-winner forecasting + walk-forward validation (NFL, MLB, NBA).
 
-Data (free; provenance and caveats recorded in reports):
-* NFL - nflverse `games.csv` (schedules, scores, closing moneylines). Package is MIT; the data
-  file licence was not confirmed, so only derived metrics are published, never the raw data.
+Data - only sources whose licence is verified (breadmaker/forecasting/licences.py):
+* NFL - FiveThirtyEight `nfl_elo.csv` (CC BY 4.0). nflverse `games.csv` was used in v0.4's first
+  runs but has NO licence file, so it is no longer used (PR #3 review). Without it there is no
+  betting-line benchmark; FiveThirtyEight's own published pre-game probability is the benchmark.
 * MLB - Retrosheet game logs. Required notice: "The information used here was obtained free of
   charge from and is copyrighted by Retrosheet. Interested parties may contact Retrosheet at
   www.retrosheet.org."
-* NBA - FiveThirtyEight `nba_elo.csv` (CC BY 4.0) if still published; otherwise the league is
-  reported as "data unavailable" (FiveThirtyEight shut down in 2025).
+* NBA - FiveThirtyEight (CC BY 4.0): the live `nba_elo.csv` if still published, otherwise the
+  historical `nbaallelo.csv` (1947-2015, game information from Basketball-Reference.com).
 NCAA - no free source with a confirmed licence was found: not modelled (markets rejected).
 
 Models: home-rate baseline (past-only), FiveThirtyEight-style Elo, logistic regression and
-LightGBM on [Elo diff, recent form] retrained each season on PRIOR seasons only. For the NFL the
-vig-free closing moneyline is reported as an external benchmark (not our model).
+LightGBM on [Elo diff, recent form] retrained each season on PRIOR seasons only.
 """
 from __future__ import annotations
 
@@ -25,28 +25,62 @@ import pandas as pd
 from . import elo
 from .feeds import _get, _prov
 
-NFLVERSE_GAMES = ["https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv",
-                  "https://github.com/nflverse/nfldata/raw/master/data/games.csv"]
+NFL_538 = ["https://projects.fivethirtyeight.com/nfl-api/nfl_elo.csv"]
 RETROSHEET = "https://www.retrosheet.org/gamelogs/gl{year}.zip"
-NBA_538 = ["https://projects.fivethirtyeight.com/nba-model/nba_elo.csv",
-           "https://raw.githubusercontent.com/fivethirtyeight/data/master/nba-forecasts/nba_elo.csv"]
+NBA_538 = ["https://projects.fivethirtyeight.com/nba-model/nba_elo.csv"]
+NBA_538_HISTORICAL = "https://raw.githubusercontent.com/fivethirtyeight/data/master/nba-elo/nbaallelo.csv"
+_538_COLS = {"date", "season", "team1", "team2", "score1", "score2"}
 
 
 # ---- loaders --------------------------------------------------------------------------------
-def load_nfl() -> tuple[pd.DataFrame, dict]:
+def _load_538(urls: list[str], label: str) -> tuple[pd.DataFrame, dict]:
     errors = {}
-    for url in NFLVERSE_GAMES:
+    for url in urls:
         try:
-            r = _get(url, {})
+            r = _get(url, {}, retries=1)
             df = pd.read_csv(io.StringIO(r.text))
-            need = {"season", "gameday", "home_team", "away_team", "home_score", "away_score"}
-            if not need.issubset(df.columns):
-                errors[url] = f"missing columns {need - set(df.columns)}"
-                continue
-            return df, _prov("nflverse games.csv", url, {}, r.content)
+            if _538_COLS.issubset(df.columns):
+                return df, _prov(f"FiveThirtyEight {label} (CC BY 4.0)", url, {}, r.content)
+            errors[url] = "unexpected columns (page is not the CSV)"
         except Exception as exc:  # noqa: BLE001
             errors[url] = f"{type(exc).__name__}: {str(exc)[:150]}"
-    raise RuntimeError(f"NFL data unavailable: {errors}")
+    raise RuntimeError(f"{label} unavailable: {errors}")
+
+
+def load_nfl() -> tuple[pd.DataFrame, dict]:
+    return _load_538(NFL_538, "nfl_elo.csv")
+
+
+def nba_historical_to_games(raw: pd.DataFrame) -> pd.DataFrame:
+    """nbaallelo.csv (two rows per game, one per team) -> one row per game in nba_elo.csv layout."""
+    g = raw[(raw["_iscopy"] == 0) & (raw["lg_id"] == "NBA")].copy()
+    away = g["game_location"] == "A"
+    out = pd.DataFrame({
+        "date": pd.to_datetime(g["date_game"], format="%m/%d/%Y").dt.strftime("%Y-%m-%d"),
+        "season": g["year_id"].astype(int),
+        "team1": np.where(away, g["opp_id"], g["team_id"]),
+        "team2": np.where(away, g["team_id"], g["opp_id"]),
+        "score1": np.where(away, g["opp_pts"], g["pts"]).astype(float),
+        "score2": np.where(away, g["pts"], g["opp_pts"]).astype(float),
+        # FiveThirtyEight's own pre-game probability for team_id -> for team1 (home)
+        "elo_prob1": np.where(away, 1 - g["forecast"], g["forecast"]).astype(float),
+        "neutral": (g["game_location"] == "N").astype(int),
+    })
+    return out.sort_values(["date", "team1"]).reset_index(drop=True)
+
+
+def load_nba() -> tuple[pd.DataFrame, dict]:
+    try:
+        return _load_538(NBA_538, "nba_elo.csv")
+    except RuntimeError as live_err:
+        try:
+            r = _get(NBA_538_HISTORICAL, {}, retries=1)
+            raw = pd.read_csv(io.StringIO(r.text))
+            return nba_historical_to_games(raw), _prov(
+                "FiveThirtyEight nbaallelo.csv 1947-2015 (CC BY 4.0; game info from Basketball-Reference.com)",
+                NBA_538_HISTORICAL, {}, r.content)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"NBA data unavailable: live: {live_err}; historical: {type(exc).__name__}: {exc}") from exc
 
 
 def load_mlb(years: range) -> tuple[pd.DataFrame, list]:
@@ -64,20 +98,6 @@ def load_mlb(years: range) -> tuple[pd.DataFrame, list]:
     df = pd.concat(frames, ignore_index=True)
     df["date"] = pd.to_datetime(df["date"].astype(str), format="%Y%m%d").dt.strftime("%Y-%m-%d")
     return df, provs
-
-
-def load_nba() -> tuple[pd.DataFrame, dict]:
-    errors = {}
-    for url in NBA_538:
-        try:
-            r = _get(url, {}, retries=1)
-            df = pd.read_csv(io.StringIO(r.text))
-            if {"date", "season", "team1", "team2", "score1", "score2"}.issubset(df.columns):
-                return df, _prov("FiveThirtyEight nba_elo.csv (CC BY 4.0)", url, {}, r.content)
-            errors[url] = "unexpected columns"
-        except Exception as exc:  # noqa: BLE001
-            errors[url] = f"{type(exc).__name__}: {str(exc)[:150]}"
-    raise RuntimeError(f"NBA data unavailable: {errors}")
 
 
 # ---- feature frame (strictly pre-game) ----------------------------------------------------------
@@ -144,30 +164,29 @@ def tournament(df: pd.DataFrame, extra: dict | None = None) -> dict:
 
 
 # ---- league runners ------------------------------------------------------------------------------
-def validate_nfl() -> dict:
-    raw, prov = load_nfl()
-    raw = raw[raw["season"] >= 2006]
-    games = [elo.Game(int(r.season), str(r.gameday), r.home_team, r.away_team,
-                      None if pd.isna(r.home_score) else float(r.home_score),
-                      None if pd.isna(r.away_score) else float(r.away_score),
-                      neutral=str(getattr(r, "location", "Home")) == "Neutral")
-             for r in raw.itertuples()]
-    df = walk_forward_models(build_frame(games, elo.NFL))
+def _validate_538(raw: pd.DataFrame, prov: dict, params: elo.EloParams, first_season: int) -> dict:
+    raw = raw[raw["season"] >= first_season]
+    games = [elo.Game(int(r.season), str(r.date), r.team1, r.team2,
+                      None if pd.isna(r.score1) else float(r.score1), None if pd.isna(r.score2) else float(r.score2),
+                      neutral=bool(getattr(r, "neutral", 0) or 0)) for r in raw.itertuples()]
+    df = walk_forward_models(build_frame(games, params))
     extra = None
-    if {"home_moneyline", "away_moneyline"}.issubset(raw.columns):
-        lines = {(str(r.gameday), r.home_team): (r.home_moneyline, r.away_moneyline) for r in raw.itertuples()}
-        p_mkt = []
-        for d, h in zip(df["date"], df["home"]):
-            hm, am = lines.get((d, h), (None, None))
-            v = elo.implied_prob_from_moneylines(hm, am) if hm is not None and not pd.isna(hm) and not pd.isna(am) else None
-            p_mkt.append(np.nan if v is None else v)
-        df["p_market"] = p_mkt
-        df = df[df["p_market"].notna()]
-        extra = {"p_market": True}
+    if "elo_prob1" in raw.columns:  # FiveThirtyEight's own published pre-game Elo probability (benchmark)
+        key = raw.drop_duplicates(["date", "team1"]).set_index(["date", "team1"])["elo_prob1"]
+        df["p_538"] = pd.to_numeric(pd.Series([key.get((d, h), np.nan) for d, h in zip(df["date"], df["home"])],
+                                              index=df.index), errors="coerce")
+        if df["p_538"].notna().any():
+            extra = {"p_538": True}
     res = tournament(df, extra=extra)
     res["source"] = prov["source"]
-    res["note"] = "p_market = vig-free closing moneyline: an external benchmark, not our model"
+    if extra:
+        res["note"] = "p_538 = FiveThirtyEight's published pre-game probability: an external benchmark, not our model"
     return res
+
+
+def validate_nfl() -> dict:
+    raw, prov = load_nfl()
+    return _validate_538(raw, prov, elo.NFL, 2000)
 
 
 def validate_mlb(years=range(2010, 2026)) -> dict:
@@ -181,15 +200,4 @@ def validate_mlb(years=range(2010, 2026)) -> dict:
 
 def validate_nba() -> dict:
     raw, prov = load_nba()
-    raw = raw[raw["season"] >= 2000]
-    games = [elo.Game(int(r.season), str(r.date), r.team1, r.team2,
-                      None if pd.isna(r.score1) else float(r.score1), None if pd.isna(r.score2) else float(r.score2),
-                      neutral=bool(getattr(r, "neutral", 0))) for r in raw.itertuples()]
-    df = walk_forward_models(build_frame(games, elo.NBA))
-    if "elo_prob1" in raw.columns:  # FiveThirtyEight's own published pre-game Elo probability (benchmark)
-        key = raw.set_index(["date", "team1"])["elo_prob1"]
-        df["p_538"] = [key.get((d, h), np.nan) for d, h in zip(df["date"], df["home"])]
-        df["p_538"] = pd.to_numeric(df["p_538"], errors="coerce")
-    res = tournament(df, extra={"p_538": True} if "p_538" in df and df["p_538"].notna().any() else None)
-    res["source"] = prov["source"]
-    return res
+    return _validate_538(raw, prov, elo.NBA, 1980)

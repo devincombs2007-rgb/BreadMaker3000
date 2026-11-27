@@ -43,6 +43,12 @@ def _daily(a) -> int:
     else:
         L.append("- Fewer than 50 settled forecasts: no accuracy verdict yet (by design).")
     L += [f"- ⚠️ {k}: {v}" for k, v in fwd["errors"].items()]
+    from .forward import run_econ_daily
+    ec = run_econ_daily(Path(a.state) / "forward.sqlite", now)
+    L += ["", "## First-release economic data (BLS, recorded as published)"]
+    L += [f"- ⚠️ {ec['error']}"] if "error" in ec else [
+        f"- First releases tracked: {ec['first_releases_tracked']} · new months today: {ec['new_periods']} · "
+        f"revisions seen today: {ec['revisions_seen']}"]
     findings = []
     if os.environ.get("GH_TOKEN") and os.environ.get("GITHUB_REPOSITORY"):
         findings = health.check(os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"], now)

@@ -30,7 +30,11 @@ def _prov(source: str, url: str, params: dict, content: bytes) -> dict:
 
 
 def _get(url: str, params: dict, timeout: float = 60, retries: int = 3, sleep=time.sleep) -> httpx.Response:
-    """GET with bounded exponential backoff on network errors, 429 and 5xx (polite to free services)."""
+    """GET with bounded exponential backoff on network errors, 429 and 5xx (polite to free services).
+
+    Refuses any URL whose dataset licence is not verified (breadmaker/forecasting/licences.py)."""
+    from .licences import require_url
+    require_url(url)
     delay = 5.0
     for attempt in range(retries + 1):
         try:
@@ -102,9 +106,20 @@ def cli_daily_highs(station: str, year: int):
 
 
 def crypto_hourly_closes(base: str, since: datetime, venues=("coinbaseexchange", "binanceus", "kraken")):
-    import ccxt
+    from .licences import LicenceUnverified, require_url
     errors = {}
-    for venue in venues:
+    usable = []
+    for venue in venues:            # exchange terms must be verified (or accepted by the owner) BEFORE any request
+        try:
+            require_url(venue)
+            usable.append(venue)
+        except LicenceUnverified as exc:
+            errors[venue] = f"terms unverified: {exc}"[:200]
+    if not usable:
+        raise LicenceUnverified(f"no crypto venue with verified data terms for {base}; set "
+                                f"BREADMAKER_DATA_TERMS_ACCEPTED only after reading the exchange's terms: {list(errors)}")
+    import ccxt
+    for venue in usable:
         try:
             ex = getattr(ccxt, venue)({"enableRateLimit": True, "timeout": 20000})
             ex.load_markets()

@@ -127,3 +127,56 @@ def run_daily(stations: dict, db_path: Path, now: datetime | None = None) -> dic
             report["errors"][st] = f"{type(exc).__name__}: {str(exc)[:200]}"
     report["scoreboard"] = scoreboard(con)
     return report
+
+
+# ---- first-release economic data (PR #3 review finding 8) ------------------------------------------
+# Kalshi's CPI / jobs markets settle on the FIRST release; the BLS API serves revised values. No free,
+# keyless, licence-verified archive of first releases was reachable (ALFRED needs a registered key; the
+# Philadelphia Fed real-time set could not be checked). So the daily run RECORDS the first releases
+# itself from now on: an append-only log of every distinct value BLS has served for each month.
+# The earliest row per (series, period) is the first release, except rows marked backfilled (months
+# already published before tracking started, whose first-release value is unknown).
+ECON_SCHEMA = """
+CREATE TABLE IF NOT EXISTS econ_obs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    series TEXT NOT NULL,
+    period TEXT NOT NULL,
+    value REAL NOT NULL,
+    seen_at TEXT NOT NULL,
+    backfilled INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS econ_obs_sp ON econ_obs(series, period);
+"""
+ECON_SERIES = ("CUSR0000SA0", "LNS14000000")
+
+
+def record_econ(con: sqlite3.Connection, series: dict, now: datetime) -> dict:
+    con.executescript(ECON_SCHEMA)
+    first_ever = con.execute("SELECT COUNT(*) FROM econ_obs").fetchone()[0] == 0
+    new_periods = revisions = 0
+    for sid, s in series.items():
+        for ts, v in s.items():
+            period = f"{ts:%Y-%m}"
+            last = con.execute("SELECT value FROM econ_obs WHERE series=? AND period=? ORDER BY id DESC LIMIT 1",
+                               (sid, period)).fetchone()
+            if last is not None and abs(last[0] - float(v)) < 1e-9:
+                continue
+            con.execute("INSERT INTO econ_obs(series, period, value, seen_at, backfilled) VALUES (?,?,?,?,?)",
+                        (sid, period, float(v), now.isoformat(timespec="seconds"), int(first_ever)))
+            if last is None:
+                new_periods += 1
+            else:
+                revisions += 1
+    first_releases = con.execute("SELECT COUNT(DISTINCT series || period) FROM econ_obs WHERE backfilled=0").fetchone()[0]
+    return {"new_periods": new_periods, "revisions_seen": revisions, "first_releases_tracked": first_releases}
+
+
+def run_econ_daily(db_path: Path, now: datetime | None = None) -> dict:
+    from .forecasting.econ import fetch_bls
+    now = now or datetime.now(timezone.utc)
+    con = connect(db_path)
+    try:
+        series, _ = fetch_bls(list(ECON_SERIES), now.year - 1, now.year)
+        return record_econ(con, series, now)
+    except Exception as exc:  # noqa: BLE001 - record; never fabricate
+        return {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
