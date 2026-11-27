@@ -23,7 +23,42 @@ after 60 days without repository activity. Runs are capped at 6 h. There is no p
 by `breadmaker/statechain.py`. The next run finds the newest **non-expired** artifact by name, checks
 its SHA-256 manifest and SQLite integrity, and **stops with "STATE LOST"** rather than starting over
 if nothing valid is found. A failed run uploads nothing, so the previous good state stays current.
-Artifacts expire after 90 days. An expired artifact halts the chain until the owner explicitly resets it. **Known gap:** if GitHub later purges expired artifacts completely, the chain can't tell that apart from a first run and would start fresh. The daily health check opens an alert issue once the newest state is more than 2 days old, long before it could expire.
+Artifacts expire after 90 days. An expired artifact halts the chain until the owner explicitly resets it.
+If GitHub purges every artifact, "no artifact" can never start a new history by itself: a first run
+needs the owner's init phrase. A fallback to an older generation needs the owner's rollback phrase.
+The daily health check opens an alert once the newest state is more than 2 days old.
+
+## Private repository: Actions cost controls (no charges possible by default)
+
+GitHub Free includes **2,000 Actions minutes/month** for private repositories, plus 500 MB of
+artifact storage. At the limit GitHub **stops the workflows**. Charges are only possible if the
+owner adds a payment method **and** sets a budget above $0 (GitHub billing docs). The owner
+checklist is in OWNER_SETUP.md.
+
+In-repo controls:
+
+| Control | Effect |
+|---|---|
+| Disabled Kalshi / Demo workflows use a job-level `if:` on the enable variable | No runner starts while disabled: **0 minutes**. The old guard jobs billed ≥ 1 minute per run, about 360 min/month for both. |
+| CI runs on `pull_request` and on pushes to `main` only, and cancels superseded runs | No more double runs (push + pull_request) for every PR commit |
+| In a private repo, arm64 and docker-build jobs run on pull requests, not on every push to `main` | Both architectures stay tested before every merge |
+| `timeout-minutes` on every job (10–25) | A hung job can't burn hours (tested) |
+| Health check `actions-minutes` (private repos) | Sums this repo's billable minutes this month: warning at 60%, alert at 85% |
+
+Estimated private-repo usage with Kalshi paper trading enabled. These are estimates: per-job
+rounding to the minute dominates.
+
+| Workflow | Runs | Est. minutes/month |
+|---|---|---|
+| kalshi-paper | 6/day × ~4 min | ~720 |
+| daily-research | 1/day × ~5 min | ~150 |
+| forecast-validation | weekly × ~8 min | ~35 |
+| CI | per PR push: ~4 jobs × ~2 min | ~8 per push |
+| kalshi-demo (if also enabled) | 4/day × ~4 min | ~480 |
+
+Total: about 1,400 min/month plus CI, under the 2,000 included. With both Kalshi cycles and heavy
+development it can approach the limit; the health check warns first, and the worst case is paused
+workflows, not a bill.
 
 ## Kalshi data constraint (important)
 

@@ -31,9 +31,9 @@ branch [`archive/trading-system-v0.2`](../../tree/archive/trading-system-v0.2).
 The forecasting models are validated **out-of-sample on real public data** (no Kalshi data needed):
 see [RESEARCH_RESULTS.md](RESEARCH_RESULTS.md). Summary:
 
-- **Weather and crypto:** calibrated to within 1–3 points.
-- **NFL/MLB Elo:** significantly beats naive baselines, but in the NFL it loses to the closing betting
-  line.
+- **Weather and crypto:** calibrated to within 1–3 points. Crypto is now blocked until the exchanges' data terms are verified.
+- **MLB/NBA Elo:** significantly beats naive baselines, but FiveThirtyEight's NBA model beats ours. The
+  NFL results were withdrawn because their source had no licence.
 - **Machine-learning challengers:** LightGBM never beat the simpler established models.
 - **Economics:** nothing beat "same as last month".
 - **Parlays:** correlation-aware joint models were not significantly better than independence.
@@ -61,6 +61,6 @@ pip install -r requirements/research.lock && breadmaker validate-forecasts   # n
 ```
 
 Weather data by [Open-Meteo](https://open-meteo.com/) (CC BY 4.0). NWS climate reports via the
-Iowa Environmental Mesonet. Economic data from the U.S. Bureau of Labor Statistics. NFL data from nflverse.
+Iowa Environmental Mesonet. Economic data from the U.S. Bureau of Labor Statistics. Sports data from FiveThirtyEight (CC BY 4.0).
 The information used here was obtained free of charge from and is copyrighted by Retrosheet.
 Interested parties may contact Retrosheet at www.retrosheet.org.

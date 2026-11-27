@@ -46,6 +46,12 @@ Findings:
 
 ### Crypto: P(price above strike at t+h), strikes at z ∈ {−1.5, −0.75, 0, +0.75, +1.5}σ
 
+> **Since the PR #3 licence review, crypto data is blocked by default.** The exchanges' market-data
+> terms (Coinbase, Binance.US, Kraken) could not be read from the build environment. The results
+> below were obtained before the review, and only derived scores were ever published, never prices.
+> They are **not re-run** until the owner reads those terms and accepts them
+> (`BREADMAKER_DATA_TERMS_ACCEPTED`, see OWNER_SETUP.md).
+
 Every 6 h since 2024-01, using public hourly OHLCV (venue recorded in the artifact) and past-only
 EWMA volatility. First run shown below. The second run differed slightly (for example BTC 1h Brier
 0.1405, ETH 1h 0.1336; calibration error 1.0–3.2 points), most likely because the data venue or
@@ -80,49 +86,49 @@ difference against the baseline lies **entirely below zero**. "No significant di
 
 ### Sports: P(home team wins), walk-forward by season (challengers trained on prior seasons only)
 
-**NFL:** 4,767 games, seasons 2009–2026, nflverse `games.csv`
+**MLB:** 30,053 games, seasons 2013–2025, Retrosheet game logs 2010–2025. Licence verified: free
+use with the notice.
 
-| Model | Brier | vs home-rate baseline [95% CI] | Verdict |
-|---|---|---|---|
-| Home-win rate (baseline) | 0.2469 | | |
-| Elo (FiveThirtyEight method) | 0.2198 | −0.0271 [−0.0314, −0.0231] | better |
-| Logistic (Elo diff + form) | 0.2194 | −0.0275 [−0.0316, −0.0236] | better |
-| LightGBM | 0.2225 | −0.0243 [−0.0285, −0.0203] | better |
-| Closing betting line, vig removed (benchmark, not ours) | **0.2105** | −0.0364 [−0.0410, −0.0320] | better |
-
-**MLB:** 30,053 games, seasons 2013–2025, Retrosheet game logs 2010–2025
-
-| Model | Brier | vs home-rate baseline [95% CI] | Verdict |
+| Model | Brier | vs home-rate baseline [95% CI] | vs plain Elo [95% CI] |
 |---|---|---|---|
 | Home-win rate (baseline) | 0.2489 | | |
-| Elo | 0.2434 | −0.0055 [−0.0063, −0.0047] | better |
-| Logistic | 0.2433 | −0.0056 [−0.0064, −0.0047] | better |
-| LightGBM | 0.2440 | −0.0048 [−0.0058, −0.0040] | better |
+| Elo | 0.2434 | −0.0055 [−0.0063, −0.0047] **better** | |
+| Logistic | 0.2433 | −0.0056 [−0.0064, −0.0047] better | −0.0001 [−0.0002, +0.0000] no sig. diff. |
+| LightGBM | 0.2440 | −0.0048 [−0.0058, −0.0040] better | +0.0006 [+0.0003, +0.0010] **worse** |
 
-**NBA: not obtained.** The FiveThirtyEight `nba_elo.csv` URL now returns a non-CSV page, and the GitHub
-mirror returns 404 (FiveThirtyEight shut down in 2025). Nothing was substituted, and no other free
-source with a confirmed licence was found.
+Source: runs [45924219429](https://github.com/devincombs2007-rgb/BreadMaker3000/actions/runs/45924219429) and
+[45925440189](https://github.com/devincombs2007-rgb/BreadMaker3000/actions/runs/45925440189).
 
-What this shows:
-- Elo genuinely beats the naive baseline in both leagues. Baseball games are close to coin flips, so
-  the gain is small there.
-- **LightGBM does not beat Elo:** in the direct test it is significantly **worse** in both leagues,
-  and logistic regression is statistically equal to Elo. The sophisticated model is rejected, and
-  Elo stays.
-- **In the NFL, the market beats every model we have** (0.2105 against Elo's 0.2198). A model worse
-  than the closing line has no edge against the market, so sports markets stay **unrouted**.
+**NBA:** 39,350 games, seasons 1983–2015 evaluated (Elo warm-up from 1980), FiveThirtyEight
+`nbaallelo.csv` (CC BY 4.0, licence file verified; game information from Basketball-Reference.com).
+The live FiveThirtyEight file no longer exists, so this is **historical (1947–2015) data only**.
+It was run on the real file in the development sandbox, and CI run
+[45928630946](https://github.com/devincombs2007-rgb/BreadMaker3000/actions/runs/45928630946) (commit `48cace5`)
+reproduced every number exactly.
 
-**Direct test against plain Elo:** run
-[45925440189](https://github.com/devincombs2007-rgb/BreadMaker3000/actions/runs/45925440189) (commit `76eaa20`).
-The sports numbers above reproduced exactly.
-
-| League | Challenger | vs Elo [95% CI] | Verdict |
+| Model | Brier | vs home-rate baseline [95% CI] | vs plain Elo [95% CI] |
 |---|---|---|---|
-| NFL | Logistic | −0.0004 [−0.0009, +0.0002] | no significant difference |
-| NFL | LightGBM | +0.0028 [+0.0013, +0.0043] | **worse** |
-| NFL | Closing line (market) | −0.0093 [−0.0119, −0.0068] | **better than our Elo** |
-| MLB | Logistic | −0.0001 [−0.0002, +0.0000] | no significant difference |
-| MLB | LightGBM | +0.0006 [+0.0003, +0.0010] | **worse** |
+| Home-win rate (baseline) | 0.2363 | | |
+| Elo | 0.2016 | −0.0346 [−0.0362, −0.0330] **better** | |
+| Logistic | 0.2016 | −0.0346 [−0.0362, −0.0330] better | +0.0000 [−0.0002, +0.0002] no sig. diff. |
+| LightGBM | 0.2022 | −0.0340 [−0.0356, −0.0324] better | +0.0006 [+0.0003, +0.0009] **worse** |
+| FiveThirtyEight's published probability (benchmark, not ours) | **0.2013** | −0.0349 [−0.0365, −0.0333] | −0.0003 [−0.0004, −0.0001] **better than our Elo** |
+
+**NFL: earlier results WITHDRAWN.** v0.4's first runs used nflverse `games.csv`, and the review
+found that it has **no licence file**. No licence means no permission to use it, so those numbers
+(Elo 0.2198, closing line 0.2105, 4,767 games) are withdrawn and the file is no longer used. The NFL
+now uses only FiveThirtyEight's `nfl_elo.csv` (CC BY 4.0). **In run 45928630946 that file was not
+obtained**: the URL serves a non-CSV page, as the live NBA file did. So there are currently **no NFL
+results**, and nothing was substituted. **The NFL has no betting-line benchmark any more**: no licensed
+free source of closing lines was found.
+
+What this shows (MLB and NBA, both licence-verified):
+- Elo genuinely beats the naive baseline. Baseball games are close to coin flips, so the gain is
+  small there.
+- **LightGBM is significantly worse than plain Elo in both leagues**, and logistic regression is
+  statistically equal to it. The sophisticated model is rejected, and Elo stays.
+- In the NBA, FiveThirtyEight's own model is slightly better than ours: by 0.0003, but
+  significantly. There is no market benchmark for either league, and sports markets stay **unrouted**.
 
 ### Economics: P(next BLS print ≥ threshold), walk-forward (refit monthly / yearly)
 
@@ -148,7 +154,10 @@ Point MAE: naive 0.260, mean 0.942, AutoReg 0.549, LightGBM 0.583.
 | AutoReg | 0.1987 | +0.0092 [−0.0171, +0.0393] | no significant difference |
 | LightGBM | 0.2446 | +0.0551 [+0.0176, +0.0971] | **worse** |
 
-What this shows: **no model beats "same as last month."** LightGBM is significantly worse on both
+What this shows: **no model beats "same as last month."**
+Since the PR #3 review, the daily run **records BLS's first releases as they are published**
+(append-only; revisions are kept as separate rows). That builds the first-release history Kalshi
+settles on. It holds no data yet, and no first-release evaluation is possible for months. LightGBM is significantly worse on both
 series. The 2020 COVID shock dominates the errors. The data is also revised, while Kalshi settles on
 the first release, so even the naive model is optimistic here. **Economics markets stay rejected.**
 

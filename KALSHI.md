@@ -81,9 +81,9 @@ discover open events/markets (all categories; paginated; <=5 req/s; backoff on 4
 | Category | Model | Evidence | Status |
 |---|---|---|---|
 | Weather: daily high (KXHIGH*) | Forecast issued about 1 day ahead, plus a past-only residual pool against the NWS CLI high (integer °F, local standard-time day) | Open-Meteo, NWS CLI via IEM | Validated on real data (see RESEARCH_RESULTS.md). Trades only if the market's rules text names the configured station. |
-| Crypto price thresholds | Zero-drift log-normal or Student-t with EWMA volatility; volatility band as the uncertainty | Public exchange OHLCV | Validated on real data. Basis risk: Kalshi settles on an index, not one exchange. |
+| Crypto price thresholds | Zero-drift log-normal or Student-t with EWMA volatility; volatility band as the uncertainty | Public exchange OHLCV | Validated on real data, but **blocked since the licence review**: exchange data terms unverified. Rejected with that reason until the owner accepts the terms. Basis risk: Kalshi settles on an index. |
 | Any event with strike ladders or brackets | Structural (model-free) | Order books only | Unit-tested; needs live books |
-| NFL / MLB / NBA game winners | Elo (FiveThirtyEight methodology) + logistic/LightGBM challengers | nflverse, Retrosheet, FiveThirtyEight | NFL/MLB: Elo **beats** baselines; LightGBM does not beat Elo; the NFL closing line beats every model. NBA source unavailable. **Not routed** (no edge over the market; mapping unverified) |
+| NFL / MLB / NBA game winners | Elo (FiveThirtyEight methodology) + logistic/LightGBM challengers | FiveThirtyEight (CC BY 4.0), Retrosheet | MLB/NBA: Elo **beats** baselines; LightGBM is **worse** than Elo; FiveThirtyEight beats our NBA Elo. NFL nflverse results withdrawn (no licence); NFL now uses FiveThirtyEight only. NBA data is historical (to 2015). **Not routed** |
 | Economics: CPI MoM, unemployment | statsmodels AutoReg + baselines + LightGBM | BLS API v1 | **Rejected by the tournament**: nothing beats naive; LightGBM significantly worse (and the data is revised, not first-release) |
 | NCAA, Fed decisions, politics, entertainment, technology, other | **None** | No free, reliable, terms-compatible source (DATA_SOURCES.md) | **Rejected with reason** |
 
