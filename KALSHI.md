@@ -83,8 +83,8 @@ discover open events/markets (all categories; paginated; <=5 req/s; backoff on 4
 | Weather: daily high (KXHIGH*) | Forecast issued about 1 day ahead, plus a past-only residual pool against the NWS CLI high (integer °F, local standard-time day) | Open-Meteo, NWS CLI via IEM | Validated on real data (see RESEARCH_RESULTS.md). Trades only if the market's rules text names the configured station. |
 | Crypto price thresholds | Zero-drift log-normal or Student-t with EWMA volatility; volatility band as the uncertainty | Public exchange OHLCV | Validated on real data. Basis risk: Kalshi settles on an index, not one exchange. |
 | Any event with strike ladders or brackets | Structural (model-free) | Order books only | Unit-tested; needs live books |
-| NFL / MLB / NBA game winners | Elo (FiveThirtyEight methodology) + logistic/LightGBM challengers | nflverse, Retrosheet, FiveThirtyEight | Validated in the tournament (RESEARCH_RESULTS.md); **not routed** until it beats baselines, mapping is verified on live data, and it beats the market |
-| Economics: CPI MoM, unemployment | statsmodels AutoReg + baselines + LightGBM | BLS API v1 | Validated in the tournament; **not routed** (revised vs first-release data) |
+| NFL / MLB / NBA game winners | Elo (FiveThirtyEight methodology) + logistic/LightGBM challengers | nflverse, Retrosheet, FiveThirtyEight | NFL/MLB: Elo **beats** baselines; LightGBM does not beat Elo; the NFL closing line beats every model. NBA source unavailable. **Not routed** (no edge over the market; mapping unverified) |
+| Economics: CPI MoM, unemployment | statsmodels AutoReg + baselines + LightGBM | BLS API v1 | **Rejected by the tournament**: nothing beats naive; LightGBM significantly worse (and the data is revised, not first-release) |
 | NCAA, Fed decisions, politics, entertainment, technology, other | **None** | No free, reliable, terms-compatible source (DATA_SOURCES.md) | **Rejected with reason** |
 
 Economics would need data feeds (CPI and jobs nowcasts, Fed funds futures) that are paid, need
@@ -106,8 +106,10 @@ honest default: the system does not guess.
 `breadmaker/forecasting/joint.py` combines leg probabilities with a **Gaussian copula**, or with the
 **empirical joint** of historical same-date residual vectors. Its uncertainty interval comes from
 perturbing the marginal probabilities and the correlation. Independence (multiplying the leg
-probabilities) is kept only as a reference. The forecast validation measures all three on real
-same-day city pairs.
+probabilities) is the baseline. On four real same-day city pairs (about 1,000 days each), **neither
+joint model beat independence significantly**, and the empirical joint was worse on one pair
+(RESEARCH_RESULTS.md). The joint models are therefore **not used to price** anything. Correlation is
+handled on the risk side instead, through correlation-group exposure caps.
 
 ## Risk controls (simulated $25)
 

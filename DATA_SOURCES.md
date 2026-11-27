@@ -8,11 +8,11 @@ that need spending, no scraping of sites whose terms forbid it.
 |---|---|---|---|
 | Weather (daily highs) | Open-Meteo forecasts and previous runs; NWS Daily Climate Reports via Iowa Environmental Mesonet | Open-Meteo CC BY 4.0, free tier non-commercial, < 10k calls/day; NWS is US-government data | **Validated** (7 stations) and **live forward log** |
 | Crypto price thresholds | Public exchange OHLCV via ccxt | Public market data | **Validated** |
-| NFL | nflverse `games.csv` (scores, closing moneylines) | nflreadr package MIT; **data-file licence not confirmed** → only derived metrics are published, never raw data | Validated in the tournament; not routed to Kalshi |
-| MLB | Retrosheet game logs | Retrosheet notice permits use; attribution required (printed in every report) | Validated in the tournament; not routed |
-| NBA | FiveThirtyEight `nba_elo.csv` | CC BY 4.0; FiveThirtyEight shut down in 2025, so the file may no longer be published | Attempted; reported as unavailable if the download fails |
+| NFL | nflverse `games.csv` (scores, closing moneylines) | nflreadr package MIT; **data-file licence not confirmed** → only derived metrics are published, never raw data | Validated: Elo beats baselines, but loses to the closing line; not routed |
+| MLB | Retrosheet game logs | Retrosheet notice permits use; attribution required (printed in every report) | Validated: Elo beats baselines (small gain); not routed |
+| NBA | FiveThirtyEight `nba_elo.csv` | CC BY 4.0; FiveThirtyEight shut down in 2025, so the file may no longer be published | **Unavailable** (verified 2026-11-27: the URL serves a non-CSV page, and the GitHub mirror returns 404). Nothing substituted |
 | NCAA | none found | No free source with a confirmed licence (CollegeFootballData needs a registered key; KenPom is paid) | **Rejected** |
-| Economics: CPI MoM, unemployment | BLS Public Data API v1 | No registration; US-government data. The API returns **revised** values while Kalshi settles on the **first release**. | Validated in the tournament; not routed |
+| Economics: CPI MoM, unemployment | BLS Public Data API v1 | No registration; US-government data. The API returns **revised** values while Kalshi settles on the **first release**. | Tournament: **no model beats naive**; rejected |
 | Economics: Fed decisions, GDP nowcasts | Fed funds futures (CME) and nowcasts | Paid or unclear terms | **Rejected** |
 | Politics | Poll aggregates | FiveThirtyEight closed; RealClearPolitics terms restrict reuse; Wikipedia poll tables are CC BY-SA but unreliable as a live feed | **Rejected** |
 | Entertainment (box office, charts, awards) | Box Office Mojo, Billboard, Rotten Tomatoes | Commercial terms forbid automated use | **Rejected** |

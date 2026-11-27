@@ -1,5 +1,30 @@
 # Test report
 
+## Iteration 4 - v0.4 expanded prediction intelligence (2026-11-27)
+
+| Area | Result |
+|---|---|
+| Unit/integration tests | **158 passed** locally (core venv). New: state chain (11), models/tournament/joint (13), bankroll + learning, daily/health/rankings, Demo gate |
+| CI on `90793e6` and `b04b633` | runs 45924219388 and 45924288371: **all jobs green**, including **core tests on amd64 and arm64** (`ubuntu-24.04-arm`), schema, safety, secret scan, docker build |
+| Real-data validation | run 45924219429: weather 7/7 stations, crypto, parlays 4 pairs, NFL, MLB, CPI, unemployment; **NBA not obtained** (source gone). Results in RESEARCH_RESULTS.md |
+| Kalshi production and Demo gates | `kalshi-run` and `kalshi-run --demo` exit 3 with no network call when off; neither attestation opens the other gate (tested) |
+| State chain | tested against a mocked GitHub API: no artifact ever → first-run init; all expired, download failure or listing error → STATE LOST; skipped runs don't reset; corrupted hash or SQLite → falls back to an older generation with a warning, or STATE LOST; reset only with the exact phrase; zip-slip refused |
+| Workflows | all files pass GitHub's JSON schema (check-jsonschema 0.39.0) and actionlint 1.7.7; the Demo workflow's config edit was verified to change only the demo section |
+| Safety scan / gitleaks | PASS / no leaks |
+
+Bugs found and fixed while testing this iteration:
+- **old Kalshi state restore could silently reset the $25 book:** a skipped or failed run, an expired
+  artifact, or a failed download all fell through to a fresh book;
+- forward log let a re-run add thresholds from a newer forecast ("forecast shopping") → one set per
+  station and day, first set stands;
+- recalibration adoption had no significance test → block-bootstrap gate (and a test that small gains are NOT adopted);
+- a sizing test asserted a cap that could not bind (test arithmetic, not code).
+
+Not tested: any live Kalshi or Kalshi Demo request (both off); scheduled runs (fire only on `main`, after merge);
+the first real state-chain restore (needs a prior artifact on `main`).
+
+---
+
 ## Iteration 3 - Kalshi pivot (2026-11-27)
 
 | Area | Result |
