@@ -1,0 +1,54 @@
+# BreadMaker3000 - Prediction Market Intelligence (SIMULATION ONLY).
+# Secrets never go here. See KALSHI.md before enabling any Kalshi API access.
+mode: simulation          # the only supported mode
+
+data_dir: ./data          # overridden by BREADMAKER_DATA_DIR
+
+# Generic risk engine (kill switch, per-engine daily-loss / drawdown halts).
+risk:
+  max_position_pct: 0.10
+  max_risk_per_trade_pct: 0.02   # unused by the Kalshi book (binary contracts: max loss = cost)
+  daily_loss_halt_pct: 0.05      # $1.25 on a $25 book
+  max_drawdown_halt_pct: 0.20    # $5 on a $25 book; halt until owner release
+  max_data_age_seconds: 300
+
+engines:
+  kalshi:
+    asset_class: prediction_markets
+    initial_capital: 25
+    benchmark: zero allocation (cash)
+
+kalshi:
+  # OFF by default. Enabling also requires env KALSHI_ACCESS_AUTHORIZED=written-authorization-on-file
+  # (Kalshi Developer Agreement v1.1 s3: API use is limited to facilitating a member's own trading;
+  # s3.1: no storing for other purposes, no sharing with third parties without written authorization).
+  api_enabled: false
+  base_url: https://api.elections.kalshi.com/trade-api/v2
+  max_requests_per_second: 5        # conservative; client also backs off on HTTP 429
+  bankroll: 25.0                    # simulated dollars
+  kelly_fraction: 0.25              # fraction of full Kelly
+  max_position_pct: 0.10            # max $2.50 cost in one market
+  max_event_exposure_pct: 0.20      # max across markets of one event
+  max_total_exposure_pct: 0.50      # at least half the bankroll stays in cash
+  min_edge: 0.03                    # required edge AFTER fees, using the conservative probability bound
+  max_spread: 0.10                  # skip markets whose yes bid/ask spread is wider
+  min_hours_to_close: 1.0
+  taker_fee_rate: 0.07              # Kalshi standard taker coefficient; per-series overrides below
+  fee_rate_overrides: {}
+  enabled_models: [weather_high_temp, crypto_price, structural]
+  # Weather model stations. A market is only modelled if its rules text names the station.
+  # NYC / Central Park (KNYC) confirmed from a Kalshi contract filing; others: verify against each
+  # market's rules_primary before relying on them (the model checks this automatically).
+  weather_stations:
+    KXHIGHNY:  {station: KNYC, rules_keyword: "Central Park", lat: 40.7790, lon: -73.9692, tz: America/New_York}
+    KXHIGHCHI: {station: KMDW, rules_keyword: "Midway", lat: 41.7860, lon: -87.7524, tz: America/Chicago}
+    KXHIGHMIA: {station: KMIA, rules_keyword: "Miami International", lat: 25.7881, lon: -80.3169, tz: America/New_York}
+    KXHIGHDEN: {station: KDEN, rules_keyword: "Denver International", lat: 39.8466, lon: -104.6562, tz: America/Denver}
+    KXHIGHLAX: {station: KLAX, rules_keyword: "Los Angeles International", lat: 33.9382, lon: -118.3866, tz: America/Los_Angeles}
+    KXHIGHPHIL: {station: KPHL, rules_keyword: "Philadelphia International", lat: 39.8733, lon: -75.2268, tz: America/New_York}
+    KXHIGHAUS: {station: KAUS, rules_keyword: "Austin-Bergstrom", lat: 30.1945, lon: -97.6699, tz: America/Chicago}
+
+schedule:
+  heartbeat_timeout_seconds: 21600
+  daily_report_utc: "21:30"
+  weekly_report_weekday: 5

@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - name: Install pinned core deps
+        run: pip install -r requirements/core.lock pytest && pip install --no-deps -e .
+      - name: Unit tests (Kalshi client/pricing/models/decisions/paper/tracking with SYNTHETIC fixtures)
+        run: pytest -q
+      - name: Workflow files are valid against GitHub's schema
+        run: pip install check-jsonschema==0.39.0 && check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml
+      - name: Safety check (no real-money or Kalshi order/signing code, no secrets)
+        run: breadmaker safety-check
+      - name: Kalshi access is OFF in the committed configuration
+        run: |
+          breadmaker kalshi-status | tee status.json
+          python -c "import json,sys; sys.exit(0 if json.load(open('status.json'))['kalshi_api_allowed'] is False else 1)"
+
+  secret-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: gitleaks (full history)
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 git /repo --no-banner --redact
+
+  docker-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env && docker compose config -q
+      - run: docker build -f docker/core.Dockerfile -t breadmaker/core:ci .
+
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: uname -m && test "$(uname -m)" = "aarch64"
+      - name: Unit tests on arm64
+        run: pip install -r requirements/core.lock pytest && pip install --no-deps -e . && pytest -q
+      - name: Core image builds and runs natively on arm64
+        run: |
+          docker build -f docker/core.Dockerfile -t breadmaker/core:arm64 .
+          test "$(docker image inspect --format '{{.Architecture}}' breadmaker/core:arm64)" = "arm64"
+          docker run --rm --entrypoint breadmaker breadmaker/core:arm64 kalshi-status

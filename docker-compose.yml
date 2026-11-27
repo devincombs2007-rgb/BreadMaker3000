@@ -1,0 +1,42 @@
+# BreadMaker3000 - Prediction Market Intelligence (SIMULATION ONLY).
+# Nothing is published to the internet: the dashboard binds to 127.0.0.1 (reach it via Tailscale).
+# Kalshi API access stays OFF unless config kalshi.api_enabled=true AND .env contains
+# KALSHI_ACCESS_AUTHORIZED=written-authorization-on-file (see KALSHI.md).
+
+name: breadmaker
+
+x-common: &common
+  restart: unless-stopped
+  env_file: .env
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+
+volumes:
+  bm-data: {}
+
+services:
+  core:
+    <<: *common
+    build: {context: ., dockerfile: docker/core.Dockerfile}
+    image: breadmaker/core:0.3.0
+    command: ["breadmaker", "supervisor"]
+    volumes: ["bm-data:/data"]
+    mem_limit: 512m
+    cpus: 0.5
+
+  dashboard:
+    <<: *common
+    image: breadmaker/core:0.3.0
+    command: ["breadmaker", "dashboard", "--host", "0.0.0.0", "--port", "8000"]
+    volumes: ["bm-data:/data"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on: [core]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/healthz',timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    mem_limit: 256m
+    cpus: 0.5

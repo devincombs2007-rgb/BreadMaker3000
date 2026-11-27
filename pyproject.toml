@@ -1,0 +1,38 @@
+[project]
+name = "breadmaker3000"
+version = "0.1.0"
+description = "BreadMaker3000 - quantitative trading research and paper-trading platform (simulation only)"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "pyyaml>=6.0",
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+  "httpx>=0.27",
+  "itsdangerous>=2.1",
+  "psutil>=5.9",
+  "python-multipart>=0.0.9",
+  "pyarrow>=15",
+]
+
+[project.optional-dependencies]
+ml = ["scikit-learn>=1.4", "lightgbm>=4.3"]
+ml-extra = ["xgboost>=2.0", "catboost>=1.2"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+breadmaker = "breadmaker.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["breadmaker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+breadmaker = ["dashboard/static/*.html"]
