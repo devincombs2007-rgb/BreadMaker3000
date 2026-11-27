@@ -98,10 +98,11 @@ jobs:
              && python engines/lumibot/tests/offline_smoke_backtest.py /repo"
       - name: Official Freqtrade 2026.10 arm64 image runs our strategies, gate tests and backtests
         run: |
-          docker run --rm -u 0 -v "$PWD:/repo" -w /repo --entrypoint bash freqtradeorg/freqtrade:2026.10 -c \
-            "uname -m && pip install -q pytest pyyaml && python -m pytest -q -p no:cacheprovider engines/freqtrade/tests/test_gate_integration.py -k 'not BreadFreqAIV1' \
+          # run as the image's own user (ftuser): Freqtrade lives in that user's site-packages
+          docker run --rm -v "$PWD:/repo:ro" -w /repo --entrypoint bash freqtradeorg/freqtrade:2026.10 -c \
+            "uname -m && pip install -q --user pytest pyyaml && python -m pytest -q -p no:cacheprovider engines/freqtrade/tests/test_gate_integration.py -k 'not BreadFreqAIV1' \
              && python engines/freqtrade/tests/offline_smoke_backtest.py /repo"
       - name: Official FreqAI arm64 image runs the LightGBM challenger backtest
         run: |
-          docker run --rm -u 0 -v "$PWD:/repo" -w /repo --entrypoint bash freqtradeorg/freqtrade:2026.10_freqai -c \
-            "pip install -q pyyaml && python engines/freqtrade/tests/offline_smoke_backtest.py /repo --freqai"
+          docker run --rm -v "$PWD:/repo:ro" -w /repo --entrypoint bash freqtradeorg/freqtrade:2026.10_freqai -c \
+            "pip install -q --user pyyaml && python engines/freqtrade/tests/offline_smoke_backtest.py /repo --freqai"
