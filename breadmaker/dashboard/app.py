@@ -14,6 +14,7 @@ Security model:
 from __future__ import annotations
 
 import base64
+import json
 import hashlib
 import hmac
 import os
@@ -195,6 +196,11 @@ def create_app(db_path: str | None = None, password_hash: str | None = None, sec
     @app.get("/api/summary")
     def summary(_: dict = Depends(require), conn=Depends(db)):
         return JSONResponse(build_summary(conn, settings, kill))
+
+    @app.get("/api/rankings")
+    def api_rankings(hours: float = 24, _: dict = Depends(require), conn=Depends(db)):
+        from ..kalshi.tracking import rankings
+        return JSONResponse(json.loads(json.dumps(rankings(conn, hours=min(max(hours, 1), 168)), default=str)))
 
     @app.post("/api/kill")
     def engage_kill(_: dict = Depends(require_csrf), conn=Depends(db)):

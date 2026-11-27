@@ -16,16 +16,21 @@ ENGINE = "kalshi"
 
 
 class PaperBook:
-    def __init__(self, conn: sqlite3.Connection, bankroll: float):
+    def __init__(self, conn: sqlite3.Connection, bankroll: float, engine: str = ENGINE):
         self.conn = conn
+        self.engine = engine
         self.ledger = Ledger(conn)
-        self.ledger.ensure_portfolio(ENGINE, "prediction_markets", bankroll)
+        self.ledger.ensure_portfolio(engine, "prediction_markets", bankroll)
+
+    def peak_equity(self) -> float:
+        hist = [e for _, e in self.ledger.equity_history(self.engine)]
+        return max(hist + [self.ledger.initial_capital(self.engine), self.equity_at_cost()])
 
     def cash(self) -> float:
-        return self.ledger.cash(ENGINE)
+        return self.ledger.cash(self.engine)
 
     def positions(self) -> dict:
-        return self.ledger.positions(ENGINE)
+        return self.ledger.positions(self.engine)
 
     def exposure(self, event_ticker: str | None = None) -> float:
         tot = 0.0
@@ -40,8 +45,8 @@ class PaperBook:
     def buy(self, d: Decision, prediction_id: int, ts: datetime | None = None) -> bool:
         if not d.side or d.contracts < 1:
             return False
-        return self.ledger.record_fill(ENGINE, f"{d.ticker}|{d.side}", "buy", d.contracts, d.price, d.fee,
-                                       f"pred-{prediction_id}-{d.side}", ts=(ts or datetime.now(timezone.utc)).isoformat(),
+        return self.ledger.record_fill(self.engine, f"{d.ticker}|{d.side}", "buy", d.contracts, d.price, d.fee,
+                                       f"{self.engine}-pred-{prediction_id}-{d.side}", ts=(ts or datetime.now(timezone.utc)).isoformat(),
                                        source="paper")
 
     def settle(self, ticker: str, result: str, ts: datetime | None = None) -> float:
@@ -55,7 +60,7 @@ class PaperBook:
             if not pos:
                 continue
             price = 1.0 if side == result else 0.0
-            self.ledger.record_fill(ENGINE, sym, "sell", pos.qty, price, 0.0, f"settle-{ticker}-{side}",
+            self.ledger.record_fill(self.engine, sym, "sell", pos.qty, price, 0.0, f"settle-{ticker}-{side}",
                                     ts=(ts or datetime.now(timezone.utc)).isoformat(), source="settlement")
             payout += pos.qty * price
         return payout

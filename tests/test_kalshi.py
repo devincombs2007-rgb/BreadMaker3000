@@ -350,3 +350,48 @@ def test_pipeline_end_to_end_with_mock_api(tmp_settings, monkeypatch):
     acted = [d for d in out["decisions"] if d["side"]]
     assert acted and all(d["contracts"] * d["price"] <= 2.5 + 1e-9 for d in acted)
     assert out["cash"] <= 25.0
+
+
+# ---- Demo environment: separate gate, separate host set, separate book ------------------------------
+DEMO_ENV = {"KALSHI_DEMO_TERMS_ACCEPTED": "demo-terms-accepted"}
+
+
+def test_production_gate_rejects_demo_host_and_demo_gate_rejects_production():
+    from breadmaker.config import kalshi_access_allowed, kalshi_demo_access_allowed
+    demo = KalshiConfig(api_enabled=True, base_url="https://external-api.demo.kalshi.co/trade-api/v2")
+    prod = KalshiConfig(api_enabled=True)
+    assert not kalshi_access_allowed(demo, AUTH)[0]                 # prod gate never opens for demo host
+    assert not kalshi_demo_access_allowed(prod, DEMO_ENV)[0]        # demo gate never opens for production
+    assert not kalshi_demo_access_allowed(demo, AUTH)[0]            # prod attestation doesn't open demo
+    assert kalshi_demo_access_allowed(demo, DEMO_ENV)[0]
+    assert not kalshi_access_allowed(prod, DEMO_ENV)[0]             # demo attestation doesn't open prod
+
+
+def test_demo_defaults_off(tmp_settings):
+    from breadmaker.config import kalshi_demo_access_allowed
+    assert tmp_settings.kalshi_demo.api_enabled is False
+    assert "demo.kalshi.co" in tmp_settings.kalshi_demo.base_url
+    assert not kalshi_demo_access_allowed(tmp_settings.kalshi_demo, DEMO_ENV)[0]
+    assert tmp_settings.kalshi_demo.bankroll == tmp_settings.kalshi.bankroll == 25.0
+
+
+def test_client_rejects_cross_host_redirect():
+    demo = KalshiConfig(api_enabled=True, base_url="https://external-api.demo.kalshi.co/trade-api/v2")
+
+    def handler(req):
+        if req.url.host == "external-api.demo.kalshi.co":
+            return httpx.Response(302, headers={"Location": "https://api.elections.kalshi.com/trade-api/v2/markets"})
+        return httpx.Response(200, json={"markets": []})
+    c = KalshiPublicClient(demo, env=DEMO_ENV, demo=True, sleep=lambda s: None,
+                           transport=httpx.MockTransport(handler))
+    c.http.follow_redirects = True
+    with pytest.raises(SafetyError, match="unexpected host"):
+        c._get("/markets")
+
+
+def test_demo_and_production_books_are_separate(conn):
+    a, b = PaperBook(conn, 25.0, "kalshi"), PaperBook(conn, 25.0, "kalshi_demo")
+    q = book(yes=[[28, 50]], no=[[70, 50]])
+    d = decide(mk(), q, fc(0.62, 0.55, 0.70), ON, 25, 25, 0, 0, NOW, 0.07)
+    assert b.buy(d, 1, NOW) and a.buy(d, 1, NOW)       # same prediction id, different books: both recorded
+    assert a.cash() == b.cash() < 25 and a.engine != b.engine

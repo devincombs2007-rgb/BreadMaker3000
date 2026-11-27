@@ -86,12 +86,47 @@ def evaluate_crypto(closes: dict[int, float], step_hours: int = 6, horizons=(1, 
     return out
 
 
-def run(stations: dict, out_dir: Path, crypto_bases=("BTC", "ETH"), weather_start=date(2024, 2, 1)) -> dict:
+def evaluate_joint_pair(fa: dict, oa: dict, fb: dict, ob: dict, window: int = 90, gap: int = 2,
+                        min_pool: int = 30) -> dict:
+    """Parlay 'A high >= round(F_A) AND B high >= round(F_B)' on the same day, three estimators."""
+    from ..research.tournament import compare
+    from .joint import empirical_joint, gaussian_copula, latent_correlation_from_residuals
+    days = sorted(set(fa) & set(oa) & set(fb) & set(ob))
+    p_ind, p_cop, p_emp, ys, blocks = [], [], [], [], []
+    for d in days:
+        past = [date.fromordinal(d.toordinal() - k) for k in range(gap, gap + window)]
+        rv = np.array([[oa[x] - fa[x], ob[x] - fb[x]] for x in past if x in fa and x in oa and x in fb and x in ob])
+        if len(rv) < min_pool:
+            continue
+        ka, kb = round(fa[d]), round(fb[d])
+        ca, cb = (lambda v, k=ka: v >= k), (lambda v, k=kb: v >= k)
+        pa = (np.sum(np.rint(fa[d] + rv[:, 0]) >= ka) + 0.5) / (len(rv) + 1)
+        pb = (np.sum(np.rint(fb[d] + rv[:, 1]) >= kb) + 0.5) / (len(rv) + 1)
+        R = latent_correlation_from_residuals(rv)
+        p_ind.append(pa * pb)
+        p_cop.append(gaussian_copula([pa, pb], R))
+        p_emp.append(empirical_joint([fa[d], fb[d]], rv, [ca, cb])[0])
+        ys.append(1.0 if (oa[d] >= ka and ob[d] >= kb) else 0.0)
+        blocks.append(f"{d.isocalendar()[0]}-{d.isocalendar()[1]}")
+    if not ys:
+        return {"n": 0}
+    y = np.asarray(ys)
+    res = compare({"independent": np.asarray(p_ind), "gaussian_copula": np.asarray(p_cop),
+                   "empirical_joint": np.asarray(p_emp)}, y, np.asarray(blocks), baseline="independent")
+    res["base_rate"] = float(y.mean())
+    res["mean_p"] = {"independent": float(np.mean(p_ind)), "gaussian_copula": float(np.mean(p_cop)),
+                     "empirical_joint": float(np.mean(p_emp))}
+    return res
+
+
+def run(stations: dict, out_dir: Path, crypto_bases=("BTC", "ETH"), weather_start=date(2024, 2, 1),
+        sections: set | None = None) -> dict:
     from .feeds import cli_daily_highs, crypto_hourly_closes, previous_day1_daily_max
     out_dir.mkdir(parents=True, exist_ok=True)
     end = datetime.now(timezone.utc).date() - timedelta(days=2)
     results = {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "provenance": [],
-               "weather": {}, "crypto": {}, "errors": {}}
+               "weather": {}, "crypto": {}, "joint": {}, "sports": {}, "econ": {}, "errors": {}}
+    station_data: dict = {}
     for i, (series, cfg) in enumerate(stations.items()):
         st = cfg["station"]
         if i:
@@ -106,6 +141,7 @@ def run(stations: dict, out_dir: Path, crypto_bases=("BTC", "ETH"), weather_star
                 obs.update(o)
                 results["provenance"].append(p2)
             results["weather"][st] = {"series": series, **evaluate_weather(fc, obs)}
+            station_data[st] = (fc, obs)
         except Exception as exc:  # noqa: BLE001 - record, never fabricate
             results["errors"][f"weather:{st}"] = f"{type(exc).__name__}: {str(exc)[:300]}"
     for base in crypto_bases:
@@ -115,6 +151,22 @@ def run(stations: dict, out_dir: Path, crypto_bases=("BTC", "ETH"), weather_star
             results["crypto"][base] = {"source": prov["source"], **evaluate_crypto(closes)}
         except Exception as exc:  # noqa: BLE001
             results["errors"][f"crypto:{base}"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+    for a, b in (("KNYC", "KPHL"), ("KNYC", "KMDW"), ("KNYC", "KLAX"), ("KMDW", "KDEN")):
+        if a in station_data and b in station_data:
+            results["joint"][f"{a}+{b}"] = evaluate_joint_pair(*station_data[a], *station_data[b])
+    if sections is None or "sports" in sections:
+        from . import sports
+        for league, fn in (("NFL", sports.validate_nfl), ("MLB", sports.validate_mlb), ("NBA", sports.validate_nba)):
+            try:
+                results["sports"][league] = fn()
+            except Exception as exc:  # noqa: BLE001
+                results["errors"][f"sports:{league}"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+    if sections is None or "econ" in sections:
+        from .econ import validate_econ
+        try:
+            results["econ"] = validate_econ(datetime.now(timezone.utc).year)
+        except Exception as exc:  # noqa: BLE001
+            results["errors"]["econ"] = f"{type(exc).__name__}: {str(exc)[:300]}"
     (out_dir / "validation.json").write_text(json.dumps(results, indent=2, default=str))
     (out_dir / "validation.md").write_text(render(results))
     return results
@@ -124,30 +176,64 @@ def _n(x, d=4):
     return "n/a" if x is None or (isinstance(x, float) and not math.isfinite(x)) else f"{x:.{d}f}"
 
 
+def _tournament_lines(t: dict) -> list[str]:
+    L = []
+    for name, m in t.get("models", {}).items():
+        if "verdict" in m:
+            lo, hi = m["ci95"]
+            L.append(f"- **{name}**: Brier {_n(m['brier'])} · vs {t['baseline']} {m['diff_vs_baseline']:+.4f} "
+                     f"[{lo:+.4f}, {hi:+.4f}] → **{m['verdict']}**")
+        else:
+            L.append(f"- {name} (baseline): Brier {_n(m['brier'])}")
+    return L
+
+
 def render(r: dict) -> str:
-    L = ["# Forecast model validation (REAL public data, out-of-sample)", "",
-         f"Generated {r['generated_at']}. No Kalshi data used. Weather data: Open-Meteo (CC BY 4.0) and NWS CLI via "
-         "Iowa Environmental Mesonet. Lower Brier/log-loss is better; ECE = calibration error.", "",
-         "## Weather: P(daily high >= k)", "",
-         "| Station | days | predictions | Brier model | Brier gaussian | Brier raw | skill vs gaussian | log loss | ECE |",
-         "|---|---|---|---|---|---|---|---|---|"]
-    for st, w in r["weather"].items():
+    """Phone-friendly Markdown (short lists, no wide tables)."""
+    L = ["# Forecast validation (real public data, out-of-sample)", "",
+         f"_{r['generated_at']}. No Kalshi data. Lower Brier is better. 95% intervals use a block bootstrap; "
+         "'better' requires the whole interval below zero._", "",
+         "Data: Open-Meteo (CC BY 4.0); NWS climate reports via Iowa Environmental Mesonet; public crypto prices; "
+         "BLS; nflverse; FiveThirtyEight (CC BY 4.0). The information used here was obtained free of charge from "
+         "and is copyrighted by Retrosheet. Interested parties may contact Retrosheet at www.retrosheet.org.", "",
+         "## Weather: P(high ≥ k)"]
+    for st, w in r.get("weather", {}).items():
         if not w.get("n_predictions"):
-            L.append(f"| {st} | 0 | insufficient overlapping data |  |  |  |  |  |  |")
+            L.append(f"- {st}: insufficient overlapping data")
             continue
-        L.append(f"| {st} | {w['n_days']} ({w['first_day']}→{w['last_day']}) | {w['n_predictions']} | "
-                 f"{_n(w['model']['brier'])} | {_n(w['gaussian_baseline']['brier'])} | {_n(w['raw_point_forecast']['brier'])} | "
-                 f"{_n(w['brier_skill_vs_gaussian'], 3)} | {_n(w['model']['log_loss'])} | {_n(w['model']['ece'])} |")
-    L += ["", "## Crypto: P(price above strike at t+h)", "",
-          "| Asset | horizon | n | Brier normal | Brier Student-t | ECE normal | ECE Student-t |", "|---|---|---|---|---|---|---|"]
-    for base, c in r["crypto"].items():
-        for h, m in c.items():
-            if not isinstance(m, dict) or "normal" not in m:
-                continue
-            L.append(f"| {base} | {h} | {m['n']} | {_n(m['normal']['brier'])} | {_n(m['student_t']['brier'])} | "
-                     f"{_n(m['normal']['ece'])} | {_n(m['student_t']['ece'])} |")
-    if r["errors"]:
-        L += ["", "## Errors (data not obtained - nothing substituted)", ""] + [f"- {k}: {v}" for k, v in r["errors"].items()]
+        L.append(f"- **{st}** ({w['n_days']} days): Brier {_n(w['model']['brier'])} vs Gaussian "
+                 f"{_n(w['gaussian_baseline']['brier'])} vs raw {_n(w['raw_point_forecast']['brier'])}; "
+                 f"calibration error {_n(w['model']['ece'], 3)}")
+    if r.get("joint"):
+        L += ["", "## Parlays: both cities ≥ forecast (same day)"]
+        for pair, j in r["joint"].items():
+            if j.get("n"):
+                L.append(f"**{pair}** ({j['n']} days, happened {j['base_rate']:.0%}; mean predicted: "
+                         + ", ".join(f"{k} {v:.0%}" for k, v in j["mean_p"].items()) + ")")
+                L += _tournament_lines(j)
+    if r.get("crypto"):
+        L += ["", "## Crypto: P(price above strike)"]
+        for base, c in r["crypto"].items():
+            for h, m in c.items():
+                if isinstance(m, dict) and "normal" in m:
+                    L.append(f"- {base} {h}: Brier normal {_n(m['normal']['brier'])} / t {_n(m['student_t']['brier'])}; "
+                             f"calibration error {_n(m['normal']['ece'], 3)} / {_n(m['student_t']['ece'], 3)}")
+    if r.get("sports"):
+        L += ["", "## Sports: home team wins (walk-forward by season)"]
+        for lg, t in r["sports"].items():
+            L.append(f"**{lg}** ({t.get('n', 0)} games, seasons {t.get('seasons')}, {t.get('source', '')})")
+            L += _tournament_lines(t)
+            if t.get("note"):
+                L.append(f"- _{t['note']}_")
+    econ = r.get("econ") or {}
+    for key, label in (("cpi_mom", "CPI month-over-month ≥ threshold"), ("unemployment_rate", "Unemployment rate ≥ threshold")):
+        if key in econ:
+            t = econ[key]
+            L += ["", f"## Economics: {label}", f"Months {t.get('months')} · point MAE: "
+                  + ", ".join(f"{k} {v:.3f}" for k, v in t.get("point_mae", {}).items())]
+            L += _tournament_lines(t)
+    if r.get("errors"):
+        L += ["", "## Not obtained (nothing substituted)"] + [f"- {k}: {v}" for k, v in r["errors"].items()]
     return "\n".join(L) + "\n"
 
 
@@ -155,8 +241,10 @@ def main(argv=None) -> int:
     from ..config import load_settings
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="validation_results")
+    ap.add_argument("--sections", default="all", help="comma list of extra sections: sports,econ (or 'all'/'none')")
     a = ap.parse_args(argv)
-    res = run(load_settings().kalshi.weather_stations, Path(a.out))
+    sections = None if a.sections == "all" else set() if a.sections == "none" else set(a.sections.split(","))
+    res = run(load_settings().kalshi.weather_stations, Path(a.out), sections=sections)
     print(render(res))
     ok = any(w.get("n_predictions") for w in res["weather"].values()) or res["crypto"]
     return 0 if ok else 1

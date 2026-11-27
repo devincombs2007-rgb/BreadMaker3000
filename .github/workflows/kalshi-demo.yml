@@ -1,0 +1,77 @@
+name: kalshi-demo
+
+# Kalshi DEMO (mock funds) research + paper cycle. Production access stays OFF. DISABLED unless ALL hold:
+#   1. repository variable KALSHI_DEMO_ENABLED == 'true' (owner has read and accepted the demo terms),
+#   2. the repository is PRIVATE (Kalshi Developer Agreement v1.1 s3.1 forbids sharing API data with third
+#      parties; artifacts, logs and summaries of a public repo are visible to others),
+#   3. the code-level gate (config + KALSHI_ACCESS_AUTHORIZED attestation) passes.
+# State (SQLite book) is carried between runs by a fail-closed artifact chain (breadmaker/statechain.py):
+# skipped runs, expired artifacts or failed downloads can never silently reset the bankroll. Simulation only.
+
+on:
+  schedule:
+    - cron: "11 */6 * * *"       # every 6 h; schedules only fire on the default branch
+  workflow_dispatch:
+    inputs:
+      reset_confirmation:
+        description: "Only to discard lost history: type the exact reset phrase from breadmaker/statechain.py"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: kalshi-demo
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    outputs:
+      allowed: ${{ steps.g.outputs.allowed }}
+    steps:
+      - id: g
+        run: |
+          if [ "${{ vars.KALSHI_DEMO_ENABLED }}" != "true" ]; then
+            echo "Kalshi DEMO cycle disabled: repository variable KALSHI_DEMO_ENABLED is not 'true' (see KALSHI.md)."; echo "allowed=false" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.repository.private }}" != "true" ]; then
+            echo "Kalshi cycle refused: repository is PUBLIC; Kalshi data must not be shared with third parties."; echo "allowed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "allowed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  cycle:
+    needs: guard
+    if: needs.guard.outputs.allowed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BREADMAKER_DATA_DIR: ${{ github.workspace }}/state
+      KALSHI_DEMO_TERMS_ACCEPTED: demo-terms-accepted
+      GH_TOKEN: ${{ github.token }}
+      STATE_RESET_CONFIRMATION: ${{ inputs.reset_confirmation }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements/research.lock && pip install --no-deps -e .
+      - name: Restore paper-trading state (fail-closed state chain; never silently resets)
+        run: python -m breadmaker.statechain restore --name kalshi-demo-state --dir state
+      - name: Enable the DEMO section only (production section untouched and still OFF)
+        run: |
+          python - <<'PY'
+          import re
+          p = "config/breadmaker.yaml"
+          s = open(p).read()
+          s = re.sub(r"(kalshi_demo:\n  api_enabled: )false", r"\1true", s)
+          open(p, "w").write(s)
+          PY
+          breadmaker kalshi-status
+      - name: Research + paper cycle
+        run: breadmaker kalshi-run --demo --max-books 300 > state/last_run.json
+      - name: Seal new state generation
+        run: python -m breadmaker.statechain seal --dir state
+      - uses: actions/upload-artifact@v4
+        with: {name: kalshi-demo-state, path: state, retention-days: 90, if-no-files-found: error}

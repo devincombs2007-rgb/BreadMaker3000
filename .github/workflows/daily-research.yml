@@ -1,0 +1,57 @@
+name: daily-research
+
+# Daily, free (public repo => unlimited Actions minutes; ~5 min/run). PUBLIC data only - no Kalshi data.
+#  1. restore the forward-forecast log from the fail-closed state chain (never silently reset)
+#  2. settle yesterday's forecasts against official NWS climate reports; publish tomorrow's
+#  3. health checks (CI, validation freshness, state freshness/expiry, repo visibility)
+#  4. phone-friendly report in the run summary; one rolling GitHub issue alerts on problems
+#  5. seal + upload the new state generation (90-day retention, refreshed daily)
+
+on:
+  schedule:
+    - cron: "37 13 * * *"        # daily 13:37 UTC (after NWS publishes yesterday's climate reports)
+  workflow_dispatch:
+    inputs:
+      reset_confirmation:
+        description: "Only to discard lost history: type the exact reset phrase from breadmaker/statechain.py"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: daily-research
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATE_RESET_CONFIRMATION: ${{ inputs.reset_confirmation }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r requirements/research.lock && pip install --no-deps -e .
+      - name: Restore forward-log state (fails loudly if history existed but cannot be restored)
+        run: python -m breadmaker.statechain restore --name forward-log-state --dir state
+      - name: Forward forecasts, settlement, health checks, report
+        run: breadmaker daily --state state --out daily_report.md
+      - name: Seal new state generation
+        run: python -m breadmaker.statechain seal --dir state
+      - uses: actions/upload-artifact@v4
+        with: {name: forward-log-state, path: state, retention-days: 90, if-no-files-found: error}
+      - if: always()
+        run: |
+          if [ -f daily_report.md ]; then cat daily_report.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Health alert (rolling GitHub issue)
+        if: always()
+        run: |
+          if [ -f daily_report.health.json ]; then
+            python -m breadmaker.health alert daily_report.health.json "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi

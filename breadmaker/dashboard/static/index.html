@@ -19,13 +19,20 @@ h1{font-size:20px;margin:10px 0 0}h2{font-size:13px;text-transform:uppercase;let
 .grid div{display:flex;justify-content:space-between;font-size:13px}
 .pill{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--line)}
 .ok{color:var(--pos)}.bad{color:var(--neg)}.stale{color:var(--warn)}
-button{font-size:16px;padding:12px 14px;border-radius:10px;border:0;font-weight:600;width:100%}
+button{font-size:1rem;min-height:44px;padding:12px 14px;border-radius:10px;border:0;font-weight:600;width:100%}
+input,select{font-size:16px;min-height:44px}
+html{-webkit-text-size-adjust:100%}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+.rk{border-top:1px solid var(--line);padding:10px 0}.rk:first-child{border-top:0}
+.rk b{font-size:.95rem;word-break:break-all}.big2{font-size:1.15rem;font-weight:700}
+.tag{display:inline-block;font-size:.75rem;padding:2px 8px;border-radius:99px;border:1px solid var(--line);margin:2px 4px 0 0}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .stop{background:var(--neg);color:#fff}.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
 table{width:100%;border-collapse:collapse;font-size:13px}td,th{padding:5px 2px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--mute);font-weight:500}
 td.r,th.r{text-align:right}svg{width:100%;height:60px;display:block;margin-top:8px}
 .inp{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);margin-bottom:8px;font-size:16px;background:var(--bg);color:var(--ink)}
 .ev{font-size:12px;border-bottom:1px solid var(--line);padding:6px 0;word-break:break-word}
-</style></head><body>
+</style></head><body><main aria-live="polite" aria-busy="false" id="main">
 <header>
   <div class="sim">SIMULATED · PAPER / DRY-RUN ONLY · NOT REAL MONEY</div>
   <div class="row"><h1>🍞 BreadMaker3000</h1><span class="mute" id="upd"></span></div>
@@ -39,7 +46,8 @@ td.r,th.r{text-align:right}svg{width:100%;height:60px;display:block;margin-top:8
 <h2>Risk events</h2><div class="card" id="events"></div>
 <h2>Models &amp; strategy rankings</h2><div class="card" id="models"></div>
 <h2>Prediction markets (simulated)</h2><div class="card" id="kalshi"></div>
-<form method="post" action="/logout"><button class="ghost" type="submit">Sign out</button></form>
+<h2>Market rankings (simulated)</h2><div class="card" id="rankings"><div class="mute">Loading…</div></div>
+<form method="post" action="/logout"><button class="ghost" type="submit">Sign out</button></form></main>
 
 <script>
 const CSRF="__CSRF__";
@@ -92,7 +100,7 @@ function killCard(k,limits,halts){
     $("rel").onsubmit=e=>{e.preventDefault();act("/api/kill/release",new FormData(e.target))};
   }else{
     $("killcard").innerHTML=`<div class="row"><b class="ok">● Risk engine active</b><span class="mute">DD halt ${pct(-limits.max_drawdown_halt_pct)} · day ${pct(-limits.daily_loss_halt_pct)}</span></div>
-     <button class="stop" style="margin-top:10px" id="kbtn">Emergency stop all engines</button>`;
+     <button class="stop" style="margin-top:10px" id="kbtn" aria-label="Emergency stop: block all new simulated trades">Emergency stop all engines</button>`;
     $("kbtn").onclick=()=>{if(confirm("Stop all new trades on every engine?"))act("/api/kill")};
   }
 }
@@ -130,6 +138,26 @@ function kalshiCard(k){
    ${rec?`<h2>Recent forecasts</h2><table><tr><th>Market</th><th class="r">P</th><th class="r">Ask</th><th>Action</th></tr>${rec}</table>`:""}
    ${rej?`<h2>Why markets were rejected</h2>${rej}`:""}`;
 }
-load();setInterval(load,30000);
+function rankCard(rk){
+  const pct=x=>x==null?"–":Math.round(x*100)+"%";
+  const ev=e=>(e||[]).map(x=>`<span class="tag">${esc(x.source)} · ${esc((x.fetched_at||"").slice(5,16))}</span>`).join("");
+  const A=(rk.allocations||[]).map(a=>`<div class="rk" role="listitem"><div class="row"><b>${esc(a.ticker)}</b><span class="ok">✔ BUY ${a.contracts} ${esc((a.side||"").toUpperCase())}</span></div>
+    <div class="big2">Model ${pct(a.p)} <span class="mute">(${pct(a.interval[0])}–${pct(a.interval[1])})</span></div>
+    <div class="mute">Price ${pct(a.price)} · edge after fees ${a.edge_after_fees>=0?"+":""}${(a.edge_after_fees||0).toFixed(3)} · EV ${usd(a.expected_value)}</div>
+    <div class="mute">${esc(a.reason)}</div>${ev(a.evidence)}</div>`).join("");
+  const C=(rk.candidates||[]).slice(0,12).map(c=>`<div class="rk" role="listitem"><div class="row"><b>${esc(c.ticker)}</b><span class="stale">✖ no buy</span></div>
+    <div>Model ${pct(c.p)} <span class="mute">(${pct(c.interval[0])}–${pct(c.interval[1])})</span> · YES ask ${pct(c.yes_ask)}</div>
+    <div class="mute">${esc(c.reason)}</div>${ev(c.evidence)}</div>`).join("");
+  const R=(rk.rejections||[]).slice(0,10).map(r=>`<div class="rk" role="listitem">${r.count} × ${esc(r.reason)}</div>`).join("");
+  return `<div class="mute">Last ${rk.window_hours} h. Simulated only. Zero allocation is normal.</div>
+   <h2>Allocations</h2><div role="list">${A||'<div class="mute">None - no credible edge after fees.</div>'}</div>
+   <h2>Candidates not bought</h2><div role="list">${C||'<div class="mute">No forecasts in window.</div>'}</div>
+   <h2>Rejected markets</h2><div role="list">${R||'<div class="mute">None.</div>'}</div>`;
+}
+async function loadRankings(){
+  const r=await fetch("/api/rankings?hours=24"); if(!r.ok)return;
+  $("rankings").innerHTML=rankCard(await r.json());
+}
+load();loadRankings();setInterval(()=>{load();loadRankings()},30000);
 </script>
 </body></html>

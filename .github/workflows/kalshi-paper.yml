@@ -5,12 +5,18 @@ name: kalshi-paper
 #   2. the repository is PRIVATE (Kalshi Developer Agreement v1.1 s3.1 forbids sharing API data with third
 #      parties; artifacts, logs and summaries of a public repo are visible to others),
 #   3. the code-level gate (config + KALSHI_ACCESS_AUTHORIZED attestation) passes.
-# State (SQLite book) is carried between runs as a short-lived private artifact. Simulation only.
+# State (SQLite book) is carried between runs by a fail-closed artifact chain (breadmaker/statechain.py):
+# skipped runs, expired artifacts or failed downloads can never silently reset the bankroll. Simulation only.
 
 on:
   schedule:
     - cron: "41 */4 * * *"       # every 4 h; schedules only fire on the default branch
   workflow_dispatch:
+    inputs:
+      reset_confirmation:
+        description: "Only to discard lost history: type the exact reset phrase from breadmaker/statechain.py"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -45,20 +51,20 @@ jobs:
       BREADMAKER_DATA_DIR: ${{ github.workspace }}/state
       KALSHI_ACCESS_AUTHORIZED: written-authorization-on-file
       GH_TOKEN: ${{ github.token }}
+      STATE_RESET_CONFIRMATION: ${{ inputs.reset_confirmation }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - run: pip install -r requirements/research.lock && pip install --no-deps -e .
-      - name: Restore previous paper-trading state (latest successful run's artifact)
-        run: |
-          mkdir -p state
-          run=$(gh run list --workflow kalshi-paper.yml --status success --limit 1 --json databaseId -q '.[0].databaseId' || true)
-          if [ -n "$run" ]; then gh run download "$run" -n kalshi-state -D state || echo "no previous state"; fi
+      - name: Restore paper-trading state (fail-closed state chain; never silently resets)
+        run: python -m breadmaker.statechain restore --name kalshi-state --dir state
       - name: Enable API in config for this run (the attestation env var is the second gate)
         run: |
           sed -i 's/^  api_enabled: false/  api_enabled: true/' config/breadmaker.yaml
       - name: Research + paper cycle
         run: breadmaker kalshi-run --max-books 300 > state/last_run.json
+      - name: Seal new state generation
+        run: python -m breadmaker.statechain seal --dir state
       - uses: actions/upload-artifact@v4
-        with: {name: kalshi-state, path: state, retention-days: 14}
+        with: {name: kalshi-state, path: state, retention-days: 90, if-no-files-found: error}

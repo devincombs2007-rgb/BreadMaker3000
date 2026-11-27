@@ -38,7 +38,10 @@ def kelly_fraction_binary(p: float, price: float) -> float:
 
 
 def decide(market: Market, quote: Quote, fc: Forecast, cfg: KalshiConfig, equity: float, cash: float,
-           event_exposure: float, total_exposure: float, now: datetime, fee_rate: float) -> Decision:
+           event_exposure: float, total_exposure: float, now: datetime, fee_rate: float,
+           group_exposure: float | None = None, peak_equity: float | None = None, open_positions: int = 0) -> Decision:
+    from .bankroll import size as size_position
+
     def no(reason: str) -> Decision:
         return Decision(market.ticker, None, 0, None, 0.0, 0.0, 0.0, reason)
 
@@ -51,34 +54,35 @@ def decide(market: Market, quote: Quote, fc: Forecast, cfg: KalshiConfig, equity
     if quote.spread > cfg.max_spread:
         return no(f"spread {quote.spread:.2f} > {cfg.max_spread:.2f}")
 
+    width = fc.p_high - fc.p_low
     candidates = []
-    for side, p_cons, p_mid, price, size in (("yes", fc.p_low, fc.p, quote.yes_ask, quote.yes_ask_size),
-                                             ("no", 1 - fc.p_high, 1 - fc.p, quote.no_ask, quote.no_ask_size)):
-        if price is None or size <= 0 or not (0 < price < 1):
+    for side, p_cons, p_mid, price, depth in (("yes", fc.p_low, fc.p, quote.yes_ask, quote.yes_ask_size),
+                                              ("no", 1 - fc.p_high, 1 - fc.p, quote.no_ask, quote.no_ask_size)):
+        if price is None or depth <= 0 or not (0 < price < 1):
             continue
-        f = cfg.kelly_fraction * kelly_fraction_binary(p_cons, price)
-        budget = min(f * equity, cfg.max_position_pct * equity,
-                     cfg.max_event_exposure_pct * equity - event_exposure,
-                     cfg.max_total_exposure_pct * equity - total_exposure, cash)
-        c = int(min(math.floor(max(budget, 0) / price), size))
-        while c > 0 and c * price + taker_fee(c, price, fee_rate) > cash:
-            c -= 1
+        sz = size_position(cfg, p_cons, width, price, depth, fee_rate, equity, cash,
+                           peak_equity if peak_equity is not None else equity, event_exposure,
+                           group_exposure if group_exposure is not None else event_exposure,
+                           total_exposure, open_positions)
+        c = sz.contracts
         if c < 1:
-            candidates.append((side, 0, price, 0.0, p_cons - price, 0.0, "size rounds to 0 contracts under limits"))
+            why = "; ".join(sz.notes) or "size rounds to 0 contracts under limits"
+            candidates.append((side, 0, price, 0.0, p_cons - price, 0.0, why))
             continue
         fee = taker_fee(c, price, fee_rate)
         edge = p_cons - price - fee / c
         ev = c * (p_mid - price) - fee
-        candidates.append((side, c, price, fee, edge, ev, ""))
+        candidates.append((side, c, price, fee, edge, ev, "; ".join(sz.notes)))
 
     if not candidates:
         return no("no executable ask")
     best = max(candidates, key=lambda x: x[4])
     side, c, price, fee, edge, ev, why = best
-    if c == 0:
-        return Decision(market.ticker, None, 0, price, 0.0, round(edge, 4), 0.0,
-                        f"best side {side}: edge {edge:+.3f} but {why}")
     if edge < cfg.min_edge:
         return Decision(market.ticker, None, 0, price, 0.0, round(edge, 4), 0.0,
                         f"best side {side}: conservative edge {edge:+.3f} after fees < min {cfg.min_edge:.3f}")
-    return Decision(market.ticker, side, c, price, fee, round(edge, 4), round(ev, 4), "edge after fees")
+    if c == 0:
+        return Decision(market.ticker, None, 0, price, 0.0, round(edge, 4), 0.0,
+                        f"best side {side}: edge {edge:+.3f} but {why}")
+    return Decision(market.ticker, side, c, price, fee, round(edge, 4), round(ev, 4),
+                    "edge after fees" + (f" ({why})" if why else ""))

@@ -8,6 +8,7 @@ itsdangerous>=2.1
 psutil>=5.9
 python-multipart>=0.0.9
 scikit-learn>=1.4
+statsmodels>=0.14
 lightgbm>=4.3
 pyarrow>=15
 ccxt==4.5.94

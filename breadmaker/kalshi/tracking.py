@@ -120,7 +120,7 @@ def walk_forward_recalibration(records: list[dict], min_train: int = 50) -> dict
     that prediction was ISSUED. Compare held-out Brier of raw vs recalibrated probabilities.
     Recommend recalibration only if it improves held-out Brier on >= min_train evaluated points."""
     recs = sorted(records, key=lambda r: r["issued_at"])
-    raw, cal, ys = [], [], []
+    raw, cal, ys, days = [], [], [], []
     for r in recs:
         train = [t for t in recs if t["settled_at"] and t["settled_at"] < r["issued_at"]]
         if len(train) < min_train:
@@ -129,8 +129,77 @@ def walk_forward_recalibration(records: list[dict], min_train: int = 50) -> dict
         raw.append(r["p"])
         cal.append(rc.apply(r["p"]))
         ys.append(r["outcome"])
+        days.append(r["issued_at"][:10])
     if len(ys) < min_train:
         return {"evaluated": len(ys), "use_recalibration": False, "reason": "insufficient settled history"}
+    from ..research.tournament import block_bootstrap_ci
+    raw_a, cal_a, y_a = np.asarray(raw), np.asarray(cal), np.asarray(ys, float)
+    mean, lo, hi = block_bootstrap_ci((cal_a - y_a) ** 2 - (raw_a - y_a) ** 2, np.asarray(days))
     b_raw, b_cal = brier(raw, ys), brier(cal, ys)
-    return {"evaluated": len(ys), "brier_raw": b_raw, "brier_recalibrated": b_cal,
-            "use_recalibration": b_cal < b_raw, "reason": "held-out comparison"}
+    # Overfitting guard: adopt only if the improvement is statistically significant (CI entirely < 0).
+    return {"evaluated": len(ys), "brier_raw": b_raw, "brier_recalibrated": b_cal, "diff_ci95": [lo, hi],
+            "use_recalibration": hi < 0, "reason": "held-out comparison with block-bootstrap CI"}
+
+
+def learned_adjustment(conn: sqlite3.Connection, model: str, now: datetime, min_train: int = 50):
+    """Recalibrator for `model` fitted on predictions settled before `now`, or None unless a walk-forward,
+    significance-tested comparison shows it improves held-out accuracy (no leakage, overfitting guard)."""
+    recs = [r for r in settled_records(conn, model) if r["settled_at"] and r["settled_at"] < now.isoformat()]
+    verdict = walk_forward_recalibration(recs, min_train=min_train)
+    if not verdict.get("use_recalibration"):
+        return None, verdict
+    return fit_recalibrator([r["p"] for r in recs], [r["outcome"] for r in recs]), verdict
+
+
+def rankings(conn: sqlite3.Connection, hours: float = 24, now: datetime | None = None, limit: int = 50) -> dict:
+    """Latest prediction per market within `hours`, ranked for the dashboard.
+
+    allocations  - simulated buys (by expected value)
+    candidates   - forecasts without a buy (by conservative edge after fees), with the reason
+    rejections   - markets not forecast, grouped by reason
+    Each forecast carries its evidence sources and fetch times."""
+    from datetime import timedelta, timezone as _tz
+    now = now or datetime.now(_tz.utc)
+    since = (now - timedelta(hours=hours)).isoformat(timespec="seconds")
+    rows = [dict(r) for r in conn.execute(
+        "SELECT p.* FROM predictions p JOIN (SELECT ticker, MAX(id) mid FROM predictions WHERE issued_at >= ? "
+        "GROUP BY ticker) l ON p.id = l.mid", (since,))]
+    alloc, cand, rej = [], [], {}
+    for r in rows:
+        if r["status"] == "rejected":
+            rej.setdefault(r["reason"] or "unspecified", []).append(r["ticker"])
+            continue
+        d = json.loads(r["decision"] or "{}")
+        ev = []
+        for eid in json.loads(r["evidence_ids"] or "[]"):
+            e = conn.execute("SELECT source, fetched_at FROM evidence WHERE id=?", (eid,)).fetchone()
+            if e:
+                ev.append({"source": e[0], "fetched_at": e[1]})
+        item = {"ticker": r["ticker"], "model": r["model"], "category": r["category"], "p": r["p"],
+                "interval": [r["p_low"], r["p_high"]], "yes_ask": r["yes_ask"], "no_ask": r["no_ask"],
+                "edge_after_fees": d.get("edge_per_contract"), "side": d.get("side"), "contracts": d.get("contracts", 0),
+                "price": d.get("price"), "expected_value": d.get("expected_value"), "reason": d.get("reason", ""),
+                "evidence": ev, "issued_at": r["issued_at"], "close_time": r["close_time"]}
+        (alloc if d.get("side") else cand).append(item)
+    alloc.sort(key=lambda x: -(x["expected_value"] or 0))
+    cand.sort(key=lambda x: -(x["edge_after_fees"] if x["edge_after_fees"] is not None else -9))
+    return {"window_hours": hours, "allocations": alloc[:limit], "candidates": cand[:limit],
+            "rejections": sorted(({"reason": k, "count": len(v), "examples": v[:3]} for k, v in rej.items()),
+                                 key=lambda x: -x["count"])}
+
+
+def rankings_markdown(rk: dict) -> str:
+    """Phone-friendly Markdown (lists, no wide tables)."""
+    def pct(x):
+        return "–" if x is None else f"{x:.0%}"
+    L = [f"## Market rankings (last {rk['window_hours']:.0f} h, simulated)", "", "### Simulated allocations"]
+    L += [f"- **{a['ticker']}**: BUY {a['contracts']} {a['side'].upper()} @ {a['price']:.2f} · model {pct(a['p'])} "
+          f"({pct(a['interval'][0])}–{pct(a['interval'][1])}) · edge {a['edge_after_fees']:+.3f} · EV ${a['expected_value']:+.2f}"
+          for a in rk["allocations"]] or ["- None (zero allocation)"]
+    L += ["", "### Best candidates not bought"]
+    L += [f"- {c['ticker']}: model {pct(c['p'])} ({pct(c['interval'][0])}–{pct(c['interval'][1])}) · yes ask "
+          f"{pct(c['yes_ask'])} · edge {('–' if c['edge_after_fees'] is None else format(c['edge_after_fees'], '+.3f'))} · {c['reason']}"
+          for c in rk["candidates"][:10]] or ["- None"]
+    L += ["", "### Rejected (no reliable model or data)"]
+    L += [f"- {r['count']} × {r['reason']}" for r in rk["rejections"][:10]] or ["- None"]
+    return "\n".join(L) + "\n"

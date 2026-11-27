@@ -48,6 +48,13 @@ kalshi:
     KXHIGHPHIL: {station: KPHL, rules_keyword: "Philadelphia International", lat: 39.8733, lon: -75.2268, tz: America/New_York}
     KXHIGHAUS: {station: KAUS, rules_keyword: "Austin-Bergstrom", lat: 30.1945, lon: -97.6699, tz: America/Chicago}
 
+# Kalshi DEMO (mock funds, separate accounts). Separate gate; can only reach demo hosts. OFF by default.
+# Enabling also requires env KALSHI_DEMO_TERMS_ACCEPTED=demo-terms-accepted (owner has read the demo terms).
+# Inherits bankroll/limits from `kalshi` unless overridden here. Read-only market data + local paper fills.
+kalshi_demo:
+  api_enabled: false
+  base_url: https://external-api.demo.kalshi.co/trade-api/v2
+
 schedule:
   heartbeat_timeout_seconds: 21600
   daily_report_utc: "21:30"
