@@ -7,7 +7,8 @@
 | Unit/integration tests | **115 passed** locally (core venv). Kalshi tests use a mock HTTP API serving SYNTHETIC responses |
 | Kalshi gate | `kalshi-run` exits 3 without any network call when access is off (verified); CI asserts committed config has access OFF |
 | Safety scan | PASS; detects planted Kalshi order path and request-signing header (tested) |
-| Real-data forecast validation | GitHub Actions run 45919313472 succeeded: 5/7 weather stations, BTC + ETH; see RESEARCH_RESULTS.md |
+| Real-data forecast validation | Run 45919313472: 5/7 stations (2 network timeouts); run 45919992178 after retries: **7/7 stations**, BTC + ETH; see RESEARCH_RESULTS.md |
+| CI on PR #2 | all 9 checks green (core tests, schema check, safety, secret scan, docker build, arm64, validation) |
 | Workflow files | Validated against GitHub's schema + actionlint (a YAML error in kalshi-paper.yml was found this way and fixed) |
 
 Bugs found and fixed while testing this iteration:
@@ -17,7 +18,7 @@ Bugs found and fixed while testing this iteration:
 - settlement lookup guessed event tickers instead of using the stored one;
 - workflow YAML scalar containing ': ' made GitHub reject kalshi-paper.yml.
 
-Not tested: any live Kalshi request (access OFF by owner decision); KMIA/KPHL weather data (timeouts).
+Not tested: any live Kalshi request (access OFF by owner decision).
 
 ---
 

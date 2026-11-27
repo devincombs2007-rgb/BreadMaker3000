@@ -12,7 +12,7 @@ _Last update: 2026-11-27 (Kalshi pivot)_
 | Kalshi endpoint/field shapes | Implemented from Trade API v2 as known at build time | not re-checkable (docs.kalshi.com unreachable from build sandbox); confirm on first authorized run |
 | Market discovery across categories | Tested (mock) | live counts unknown until access |
 | Executable pricing + fees | Tested | fee formula conservative (rounds up) |
-| Weather model | **Verified on real data** (5 stations × ~997 days, out-of-sample) | RESEARCH_RESULTS.md; KMIA/KPHL data timed out (retry added) |
+| Weather model | **Verified on real data** (7 stations × ~997 days, out-of-sample) | RESEARCH_RESULTS.md |
 | Crypto model | **Verified on real data** (BTC/ETH, 1/6/24 h, ~20k each) | RESEARCH_RESULTS.md |
 | Structural combinations | Tested (synthetic books) | needs live order books |
 | Other categories (sports, politics, economics, entertainment, tech) | **Rejected by design** | no free, terms-compatible evidence source integrated |
