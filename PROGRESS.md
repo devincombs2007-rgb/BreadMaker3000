@@ -16,7 +16,7 @@ _Last update: 2026-11-26 (iteration 2)_
 | Freqtrade dry-run engine | Tested (engine backtests) · **Blocked** for Verified | needs a host with exchange access |
 | LumiBot + Alpaca paper | Tested (engine backtests) · **Blocked** | needs host + owner's paper keys |
 | LEAN cross-validation | Implemented, logic + risk gate Tested | engine run not attempted (image size) |
-| ARM64 compatibility | CI job on native `ubuntu-24.04-arm` | see TEST_REPORT.md for the run result |
+| ARM64 compatibility | **Tested** on native `ubuntu-24.04-arm` (CI run 45914520313, all steps green) | not yet run on an ARM host |
 | Real-data research workflow | Implemented | GitHub Actions `research.yml`; see RESEARCH_RESULTS.md |
 | Free hosting | Investigated | [HOSTING.md](HOSTING.md); Oracle A1 capacity-blocked; next: Oracle E2.1.Micro or GCP e2-micro |
 | Low-memory deployment profile | Implemented, config validated | `docker-compose.micro.yml`; idle RSS measured for core/dashboard/freqtrade start-up only |

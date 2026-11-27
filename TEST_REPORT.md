@@ -10,7 +10,7 @@
 | LumiBot partial fills + reconciliation | Pass on real LumiBot `Order` objects | CI `lumibot-smoke` |
 | Engine smoke backtests (synthetic) | Unchanged: BreadTrendV1 20 trades / max stake 10.07%; FreqAI 10 trades / 9.9%; LumiBot 33 fills, 0 spurious rejections | local + CI |
 | Peak RSS (synthetic backtests) | LumiBot 214 MiB, Freqtrade 316 MiB, FreqAI 402 MiB | `resource.getrusage` |
-| ARM64 | Core unit tests **passed natively on `ubuntu-24.04-arm`**; image builds + in-container engine runs: ARM64_IMAGE_RESULT | CI `arm64` |
+| ARM64 | Core unit tests **passed natively on `ubuntu-24.04-arm`**; core + LumiBot images **built natively (arch verified arm64)**; LumiBot backtest + fill tests, official Freqtrade 2026.10 image (Python 3.14) gate tests + backtest, and FreqAI LightGBM backtest **all passed** - CI run 45914520313 | CI `arm64` |
 | Real-data research | Ran on GitHub Actions; results in RESEARCH_RESULTS.md (crypto baseline **rejected**, no strategy accepted) | research run 45913970684 |
 
 Bugs found this iteration by CI/tests: bootstrap test depended on running as root (fixed);
