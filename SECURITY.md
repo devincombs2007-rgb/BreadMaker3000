@@ -1,16 +1,22 @@
 # Security
 
-## Guarantees enforced in code (and tested)
+## Prediction-market controls (current)
+
+| Control | Where |
+|---|---|
+| No Kalshi order / portfolio / auth / request-signing code; CI scan fails on such patterns | `safety_scan.py`, `tests/test_safety_and_config.py` |
+| Kalshi client is GET-only, rejects private paths, allowed hosts only | `kalshi/client.py`, `config.py` |
+| Kalshi access OFF unless config flag + written-authorization attestation; workflow refuses public repos | `config.kalshi_access_allowed`, `.github/workflows/kalshi-paper.yml` |
+| Kalshi risk parameters can only be tightened (hard bounds) | `config.KalshiConfig` |
+| Zero-price fills only allowed as settlement payouts | `ledger.py` |
+| No Kalshi credentials exist anywhere (public data needs none) | design |
+
+## Earlier controls (still in force where applicable)
 
 | Control | Where |
 |---|---|
 | No real-money mode exists; config `mode` must be `simulation` | `config.load_settings` |
-| Freqtrade must be `dry_run: true`, spot, no margin, **no exchange keys** | `config.assert_freqtrade_dry_run`, CI, installer |
-| Running Freqtrade bot re-verified every minute; live mode → kill switch + `/stopentry` | `orchestrator/freqtrade_sentinel.py` |
-| Alpaca: paper endpoint only, `ALPACA_PAPER=true`, live keys (`AK…`) rejected, broker built with `PAPER: True` | `config.py`, `secrets_store.py`, `run_paper.py` |
 | Risk limits can only be tightened (hard ceilings; shorting/leverage disabled) | `config.RiskLimits` |
-| Kill switch mounted read-only into trading containers | `docker-compose.yml` |
-| No withdrawal permissions are ever requested (no exchange keys at all; Alpaca paper keys only) | design |
 | Secret scanning: gitleaks (full history) + repo safety scan in CI | `.github/workflows/ci.yml`, `safety_scan.py` |
 
 ## Secrets
@@ -30,8 +36,7 @@ in instance metadata - use **one-off** Tailscale keys and **short-lived read-onl
 ### Runtime secrets
 
 - `.env` (internal random secrets) is generated on the server and git-ignored.
-- Dashboard password (scrypt) and Alpaca paper keys live in `bm-data:/data/secrets` (dir `0700`,
-  files `0600`), entered through the authenticated dashboard. The API never returns keys.
+- Dashboard password (scrypt) and session key live in `bm-data:/data/secrets` (dir `0700`, files `0600`).
 - Never paste keys into chat, GitHub, issues or screenshots.
 
 ## Network exposure
@@ -63,4 +68,4 @@ Owner: if anything looks wrong, tap **Emergency stop all engines** on the dashbo
 - Images are pinned by tag, not digest (planned).
 - The Tailscale auth key pasted into cloud-init stays in the provider's instance metadata; use a
   **one-off** key so it is useless after first use.
-- Risk-enforcement audit and residual risks: [RISK_AUDIT.md](RISK_AUDIT.md).
+- Risk-enforcement audit of the archived engines: [RISK_AUDIT.md](RISK_AUDIT.md).

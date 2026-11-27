@@ -1,43 +1,44 @@
-# Free hosting options (investigated 2026-11-26)
+# Free hosting (no Oracle required) - updated 2026-11-27
 
-Requirement: run the actual Docker stack **24/7** with persistent storage, for **$0**, no paid
-plans or subscriptions. Freqtrade needs a long-running process (it cannot be a cron job);
-LumiBot's ETF strategy trades at most once per day.
+The prediction-market workload is **periodic** (one research cycle every few hours; settlements are
+daily). It does not need an always-on process, which changes the hosting answer.
 
-Measured footprint (sandbox, amd64): idle core 73 MiB, dashboard 77 MiB, Freqtrade 207 MiB at
-start-up; **peak** RSS of real-engine backtests (synthetic data): LumiBot 214 MiB, Freqtrade 316 MiB,
-FreqAI 402 MiB. Sum without FreqAI ≈ 680 MiB → fits 1 GB + swap, tightly; FreqAI should stay off on
-1 GB hosts. Live (paper) memory has not been measured. Images: Freqtrade 0.31 GB, core 0.16 GB,
-LumiBot 0.64 GB (compressed). Disk needed: ~10 GB without LEAN.
+| Need | Free option | Status |
+|---|---|---|
+| Forecast-model validation (public data only) | **GitHub Actions** (`forecast-validation.yml`, weekly, ~10 min) | **Working now** |
+| Kalshi research + paper cycles | **GitHub Actions** (`kalshi-paper.yml`, every 4 h, state carried as a 14-day private artifact) | Built; **disabled** until (a) Kalshi authorizes and (b) the repo is private |
+| Always-on mobile dashboard | Google Cloud e2-micro, Oracle E2.1.Micro, or none (read the Actions run summary in the GitHub app) | Optional |
 
-| Option | Always-free resources | Fits our stack? | Persistent? | Caveats | Verdict |
-|---|---|---|---|---|---|
-| **Oracle A1 (Ampere, arm64)** | up to 4 OCPU / 24 GB | Yes, everything | Yes | Ashburn "out of host capacity" at all tried sizes; capacity frees up unpredictably; idle-reclamation policy | Keep retrying occasionally; best target when available |
-| **Oracle VM.Standard.E2.1.Micro (AMD)** | 2 VMs × (1/8 OCPU, 1 GB) | Crypto stack yes (micro profile + 4 GB swap); LumiBot unproven | Yes | Very slow CPU (builds/start-up take long); E2 micro is also capacity-limited in some regions; only certain ADs | **Try next: same account, same steps, different shape** |
-| **Google Cloud e2-micro** | 1 VM (2 shared vCPU, 1 GB) in us-west1 / us-central1 / us-east1, 30 GB standard disk | Same as Oracle micro | Yes | Needs a billing account (card on file, $0 if within free tier); free tier covers only standard disk in those 3 regions; ~1 GB/month free egress | **Best non-Oracle option** |
-| AWS / Azure free tiers | t3.micro / B1s | Yes (1 GB) | Yes | Time-limited (6–12 months / credits) - not "always free" | Not recommended |
-| GitHub Actions | 2,000 min/mo (private) / unlimited (public); jobs ≤ 6 h | No 24/7 process | No | Not a host; fine for scheduled **research** (implemented: `research.yml`) and could run a once-daily LumiBot paper rebalance | Use for research only |
-| Hugging Face Spaces (free CPU) | 2 vCPU / 16 GB | Docker yes | **No** free persistent storage; sleeps when idle | Loses state; not built for unattended trading bots | No |
-| Render / Koyeb / Railway / Fly.io free | small web services | No | Sleep / no free volumes / trial credits | Not always-on with storage | No |
+## Why GitHub Actions is the primary "host"
 
-Sources: [Oracle Always Free resources](https://docs.oracle.com/iaas/Content/FreeTier/resourceref.htm),
-[Google Cloud free features](https://docs.cloud.google.com/free),
-[GitHub arm64 runners in private repos](https://github.blog/changelog/2026-01-29-arm64-standard-runners-are-now-available-in-private-repositories),
-[GitHub-hosted runner reference](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-Facts about third-party plans change; re-check before relying on them.
+- **Free:** public repos get unlimited Actions minutes; private repos get 2,000 min/month on the free
+  plan. Kalshi cycles at ~3 min × 6/day ≈ 540 min/month plus validation ≈ 40 min/month fit inside
+  that.
+- **Phone-friendly:** results show in the run summary, readable in the GitHub iPhone app.
+- **No server to maintain**, and no capacity lottery.
 
-## Recommendation (in order)
+Limits: scheduled workflows only run from the **default branch**, may start late, and are disabled
+after 60 days without repository activity. Runs are capped at 6 h. There is no persistent disk: the
+paper-trading state is carried as an artifact, and if a run fails the next one resumes from the last
+successful state.
 
-1. **Oracle E2.1.Micro** (no new account): in the instance form choose
-   *Change shape → Specialty and previous generation → VM.Standard.E2.1.Micro*. Everything else
-   in OWNER_SETUP.md is unchanged; `install.sh` detects the 1 GB RAM and enables
-   `docker-compose.micro.yml` + 4 GB swap. Start with crypto (Freqtrade) only; add Alpaca keys later
-   and watch memory on the dashboard.
-2. **Google Cloud e2-micro** if Oracle micro is also unavailable: Ubuntu 24.04 image, region
-   us-east1/us-central1/us-west1, standard persistent disk ≤ 30 GB, paste `deploy/cloud-init.yaml`
-   as metadata key `user-data`. No firewall rules needed (Tailscale). Set a $1 budget alert.
-3. Keep retrying **Oracle A1** at quiet hours (weekends, early morning US time). When it succeeds,
-   restore a backup (DEPLOYMENT.md) and drop the micro profile.
+## Kalshi data constraint (important)
 
-Untested: none of these hosts has run the stack yet. The stack itself is tested on amd64 (sandbox
-Docker) and on arm64 (GitHub `ubuntu-24.04-arm` CI job).
+Kalshi's Developer Agreement §3.1 forbids sharing API data with third parties. In a **public**
+repository, Actions artifacts and logs are visible to others, so Kalshi cycles must run either:
+1. in a **private** repository's Actions (artifacts private), or
+2. on a private server (Google Cloud e2-micro, Oracle micro, or a home machine).
+
+The workflow enforces (1) automatically: it refuses to run in a public repository.
+
+## Always-on options, if wanted later
+
+| Option | Always-free resources | Fit | Caveats |
+|---|---|---|---|
+| Google Cloud e2-micro | 1 VM (2 shared vCPU, 1 GB), us-west1 / us-central1 / us-east1, 30 GB standard disk | Core + dashboard use ~150 MiB idle (measured) | Billing account with a card on file ($0 within limits) |
+| Oracle VM.Standard.E2.1.Micro | 2 × (1/8 OCPU, 1 GB) | Same | Capacity-limited in some regions |
+| Hugging Face Spaces, Render, Koyeb free | Small containers | Poor | Sleep when idle and/or no free persistent storage |
+
+Sources checked 2026-11-26/27: [Google Cloud free features](https://docs.cloud.google.com/free),
+[Oracle Always Free resources](https://docs.oracle.com/iaas/Content/FreeTier/resourceref.htm),
+[GitHub Actions billing](https://docs.github.com/en/actions/reference/usage-limits-billing-and-administration).

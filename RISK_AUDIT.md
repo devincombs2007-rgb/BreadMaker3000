@@ -1,5 +1,9 @@
 # Risk-enforcement audit (2026-11-26)
 
+> Scope: the Freqtrade/LumiBot/LEAN engines, now on branch `archive/trading-system-v0.2`. The shared
+> risk-engine findings (F2 persistent halts, F7 per-engine halts, F10 logging) still apply to the Kalshi
+> book; Kalshi-specific controls are in KALSHI.md and SECURITY.md.
+
 Question: can any engine, especially Freqtrade, bypass BreadMaker's limits (10% position,
 0.5% risk/trade, 1% daily-loss halt, 5% drawdown halt, stale-data and duplicate-order rejection,
 no shorts/leverage)? Method: read upstream source (Freqtrade 2026.10, LumiBot 4.6.100), trace every

@@ -19,6 +19,8 @@ jobs:
         run: pip install -r requirements/core.lock pytest && pip install --no-deps -e .
       - name: Unit tests (Kalshi client/pricing/models/decisions/paper/tracking with SYNTHETIC fixtures)
         run: pytest -q
+      - name: Workflow files are valid against GitHub's schema
+        run: pip install check-jsonschema==0.39.0 && check-jsonschema --builtin-schema vendor.github-workflows .github/workflows/*.yml
       - name: Safety check (no real-money or Kalshi order/signing code, no secrets)
         run: breadmaker safety-check
       - name: Kalshi access is OFF in the committed configuration
