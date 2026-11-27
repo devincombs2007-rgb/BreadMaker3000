@@ -6,7 +6,8 @@ daily). It does not need an always-on process, which changes the hosting answer.
 | Need | Free option | Status |
 |---|---|---|
 | Forecast-model validation (public data only) | **GitHub Actions** (`forecast-validation.yml`, weekly, ~10 min) | **Working now** |
-| Kalshi research + paper cycles | **GitHub Actions** (`kalshi-paper.yml`, every 4 h, state carried as a 14-day private artifact) | Built; **disabled** until (a) Kalshi authorizes and (b) the repo is private |
+| Daily research report, forward forecast log, health checks | **GitHub Actions** (`daily-research.yml`, daily, a few minutes; state carried as a 90-day artifact through the fail-closed state chain) | Built; starts once merged to `main` |
+| Kalshi research + paper cycles | **GitHub Actions** (`kalshi-paper.yml`, every 4 h, state carried as a 90-day private artifact via the fail-closed state chain) | Built; **disabled** until (a) Kalshi authorizes and (b) the repo is private |
 | Always-on mobile dashboard | Google Cloud e2-micro, Oracle E2.1.Micro, or none (read the Actions run summary in the GitHub app) | Optional |
 
 ## Why GitHub Actions is the primary "host"
@@ -18,9 +19,11 @@ daily). It does not need an always-on process, which changes the hosting answer.
 - **No server to maintain**, and no capacity lottery.
 
 Limits: scheduled workflows only run from the **default branch**, may start late, and are disabled
-after 60 days without repository activity. Runs are capped at 6 h. There is no persistent disk: the
-paper-trading state is carried as an artifact, and if a run fails the next one resumes from the last
-successful state.
+after 60 days without repository activity. Runs are capped at 6 h. There is no persistent disk: state is carried as an artifact
+by `breadmaker/statechain.py`. The next run finds the newest **non-expired** artifact by name, checks
+its SHA-256 manifest and SQLite integrity, and **stops with "STATE LOST"** rather than starting over
+if nothing valid is found. A failed run uploads nothing, so the previous good state stays current.
+Artifacts expire after 90 days: a gap longer than that halts the chain until the owner explicitly resets it.
 
 ## Kalshi data constraint (important)
 

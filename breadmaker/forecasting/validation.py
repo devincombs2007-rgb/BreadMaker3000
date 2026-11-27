@@ -223,6 +223,9 @@ def render(r: dict) -> str:
         for lg, t in r["sports"].items():
             L.append(f"**{lg}** ({t.get('n', 0)} games, seasons {t.get('seasons')}, {t.get('source', '')})")
             L += _tournament_lines(t)
+            if t.get("vs_elo"):
+                L.append("- Against plain Elo:")
+                L += ["  " + x for x in _tournament_lines(t["vs_elo"]) if "(baseline)" not in x]
             if t.get("note"):
                 L.append(f"- _{t['note']}_")
     econ = r.get("econ") or {}

@@ -135,6 +135,11 @@ def tournament(df: pd.DataFrame, extra: dict | None = None) -> dict:
     res = compare(preds, ev["y"].to_numpy(), blocks, baseline="p_home_rate")
     res["metrics"] = {c: metrics(preds[c], ev["y"].to_numpy()) for c in preds}
     res["seasons"] = [int(ev["season"].min()), int(ev["season"].max())] if len(ev) else []
+    # Second question: does anything beat plain Elo? (ML challengers must beat the simple established
+    # model, not only the home-rate baseline; the market benchmark is compared to Elo the same way.)
+    if "p_elo" in preds and len(preds) > 2:
+        vs = {c: v for c, v in preds.items() if c != "p_home_rate"}
+        res["vs_elo"] = compare(vs, ev["y"].to_numpy(), blocks, baseline="p_elo")
     return res
 
 

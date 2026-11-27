@@ -118,6 +118,7 @@ def test_sports_walk_forward_uses_prior_seasons_only():
     res = tournament(df)
     assert res["models"]["p_elo"]["verdict"] == "better"              # real signal exists in synthetic data
     assert set(res["metrics"]) >= {"p_home_rate", "p_elo", "p_logit"}
+    assert res["vs_elo"]["baseline"] == "p_elo" and "p_logit" in res["vs_elo"]["models"]   # ML must beat Elo too
 
 
 # ---- economics --------------------------------------------------------------------------------------
