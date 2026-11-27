@@ -1,4 +1,28 @@
-# Test report - 2026-11-26
+# Test report
+
+## Iteration 2 - 2026-11-27
+
+| Area | Result | Evidence |
+|---|---|---|
+| Core unit tests (amd64) | **94 passed** locally; CI `core-tests` green on run 45914036324 | pytest |
+| Cloud-init credential leak | Fixed. Real bootstrap executed with stub binaries, plain and under `bash -x`, non-root (`sudo`) path: fake key/token absent from log, argv, stdout/stderr, script on disk; secret files removed, also on failure | `tests/test_bootstrap_secrets.py` |
+| Risk gate inside real Freqtrade | Pass: missing mount / no or stale monitor heartbeat / halt / kill switch → entry denied through Freqtrade's own fail-open wrapper; both strategies | CI `freqtrade-smoke` |
+| LumiBot partial fills + reconciliation | Pass on real LumiBot `Order` objects | CI `lumibot-smoke` |
+| Engine smoke backtests (synthetic) | Unchanged: BreadTrendV1 20 trades / max stake 10.07%; FreqAI 10 trades / 9.9%; LumiBot 33 fills, 0 spurious rejections | local + CI |
+| Peak RSS (synthetic backtests) | LumiBot 214 MiB, Freqtrade 316 MiB, FreqAI 402 MiB | `resource.getrusage` |
+| ARM64 | Core unit tests **passed natively on `ubuntu-24.04-arm`**; image builds + in-container engine runs: ARM64_IMAGE_RESULT | CI `arm64` |
+| Real-data research | Ran on GitHub Actions; results in RESEARCH_RESULTS.md (crypto baseline **rejected**, no strategy accepted) | research run 45913970684 |
+
+Bugs found this iteration by CI/tests: bootstrap test depended on running as root (fixed);
+research deps conflicted (ccxt pins idna/cffi → dedicated `research.lock`, yfinance 1.7.0);
+smoke harness missed the new gate module (fixed); validator reported adjusted-price rounding as
+defects without magnitude (fixed: tolerance + counts).
+
+Not tested: live dry-run/paper trading (no host yet), LEAN engine run, any free host.
+
+---
+
+## Iteration 1 - 2026-11-26
 
 Environment: Linux x86_64 cloud sandbox, Python 3.12, Docker 29.9. Exchange/broker APIs
 (Kraken, Alpaca, Yahoo) and Debian apt mirrors were **blocked by the sandbox network

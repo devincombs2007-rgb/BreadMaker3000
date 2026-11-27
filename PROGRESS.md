@@ -3,26 +3,22 @@
 Legend: **Implemented** (code exists) → **Tested** (automated tests pass) → **Verified**
 (observed working in its real target environment). **Blocked** needs something external.
 
-_Last update: 2026-11-26_
+_Last update: 2026-11-26 (iteration 2)_
 
 | Component | Status | Evidence / blocker |
 |---|---|---|
-| Repo structure, CI, pinned lockfiles | Tested | 68 unit tests; CI workflow (not yet run on GitHub) |
-| Central config + safety validation | Tested | `test_safety_and_config.py` |
-| Independent risk engine + kill switch | Tested | `test_risk_and_ledger.py`; e2e kill switch in Docker |
-| Separate $1,000 ledgers ×3 | Tested | ledger tests; LumiBot smoke wrote 33 fills |
-| Freqtrade dry-run engine (`BreadTrendV1`) | Tested (engine backtest) · **Blocked** for Verified | real Freqtrade backtest OK; live dry-run needs Kraken access → Oracle |
-| Freqtrade sentinel (ledger mirror, halts) | Tested | fake-API tests; live mirror pending Oracle |
-| LumiBot + Alpaca paper (`BreadETFRotation`) | Tested (engine backtest) · **Blocked** | needs owner's Alpaca paper keys + Oracle |
-| LEAN cross-validation | Implemented, logic Tested | engine run not attempted (image size); needs data |
-| Backtester, costs, metrics | Tested | no-look-ahead test |
-| Strategy lab + DSR multiple-testing | Tested | rejected all 18 synthetic trials |
-| ML pipeline (walk-forward, drift, registry) | Tested | leakage test validated |
-| FreqAI challenger | Tested (engine backtest) | shadow mode via `--profile freqai` |
-| Dashboard (auth, setup, kill, settings) | Tested + Docker e2e | iPhone viewport screenshot |
-| Reports (daily/weekly) | Tested | supervisor writes at 21:30 UTC |
-| Docker Compose stack | Tested (amd64 sandbox) | arm64 build pending Oracle |
-| Oracle deploy (cloud-init, installer, Tailscale) | Implemented | **Blocked**: owner creates instance |
-| Real market data research runs | Planned | needs network (Oracle) |
-| 90-day forward paper validation | Planned | starts when bots run on Oracle |
+| Central config + safety validation | Tested | unit tests; CI |
+| Cloud-init credential handling | **Fixed + Tested** | `test_bootstrap_secrets.py` executes the real bootstrap (also under `bash -x`, non-root path) |
+| Independent risk engine, per-engine halts, kill switch | Tested | `test_risk_and_ledger.py`, `test_risk_audit.py` |
+| Freqtrade fail-closed risk gate | Tested **inside real Freqtrade** | `engines/freqtrade/tests/test_gate_integration.py` (CI) |
+| Risk audit across engines | Done | [RISK_AUDIT.md](RISK_AUDIT.md): 10 findings fixed, 5 residual risks documented |
+| Separate $1,000 ledgers ×3 (+ FreqAI shadow book) | Tested | partial-fill + reconciliation tests on real LumiBot objects |
+| Freqtrade dry-run engine | Tested (engine backtests) · **Blocked** for Verified | needs a host with exchange access |
+| LumiBot + Alpaca paper | Tested (engine backtests) · **Blocked** | needs host + owner's paper keys |
+| LEAN cross-validation | Implemented, logic + risk gate Tested | engine run not attempted (image size) |
+| ARM64 compatibility | CI job on native `ubuntu-24.04-arm` | see TEST_REPORT.md for the run result |
+| Real-data research workflow | Implemented | GitHub Actions `research.yml`; see RESEARCH_RESULTS.md |
+| Free hosting | Investigated | [HOSTING.md](HOSTING.md); Oracle A1 capacity-blocked; next: Oracle E2.1.Micro or GCP e2-micro |
+| Low-memory deployment profile | Implemented, config validated | `docker-compose.micro.yml`; idle RSS measured for core/dashboard/freqtrade start-up only |
+| 90-day forward paper validation | Not started | requires a running host |
 | Real-money trading | **Not implemented by design** | requires §15 criteria + explicit owner authorization |

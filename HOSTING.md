@@ -4,8 +4,10 @@ Requirement: run the actual Docker stack **24/7** with persistent storage, for *
 plans or subscriptions. Freqtrade needs a long-running process (it cannot be a cron job);
 LumiBot's ETF strategy trades at most once per day.
 
-Measured footprint (sandbox, amd64, idle): core 73 MiB, dashboard 77 MiB, Freqtrade 207 MiB at
-start-up. Active LumiBot memory is **not measured yet**. Images: Freqtrade 0.31 GB, core 0.16 GB,
+Measured footprint (sandbox, amd64): idle core 73 MiB, dashboard 77 MiB, Freqtrade 207 MiB at
+start-up; **peak** RSS of real-engine backtests (synthetic data): LumiBot 214 MiB, Freqtrade 316 MiB,
+FreqAI 402 MiB. Sum without FreqAI ≈ 680 MiB → fits 1 GB + swap, tightly; FreqAI should stay off on
+1 GB hosts. Live (paper) memory has not been measured. Images: Freqtrade 0.31 GB, core 0.16 GB,
 LumiBot 0.64 GB (compressed). Disk needed: ~10 GB without LEAN.
 
 | Option | Always-free resources | Fits our stack? | Persistent? | Caveats | Verdict |

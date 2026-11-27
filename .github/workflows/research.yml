@@ -12,6 +12,7 @@ on:
   push:
     paths:
       - "breadmaker/research/**"
+      - "breadmaker/data.py"
       - "engines/freqtrade/research_backtest.py"
       - "engines/freqtrade/user_data/strategies/**"
       - "engines/lumibot/bread_lumibot/logic.py"

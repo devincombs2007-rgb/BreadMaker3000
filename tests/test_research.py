@@ -22,7 +22,14 @@ def test_synthetic_data_is_clean(df):
 def test_validate_detects_bad_data(df):
     bad = df.copy()
     bad.iloc[5, bad.columns.get_loc("high")] = 0.0001
-    assert "high/low inconsistent with open/close" in validate_ohlcv(bad)
+    probs = validate_ohlcv(bad)
+    assert any(p.startswith("high/low inconsistent with open/close: 1 rows") for p in probs)
+
+
+def test_validate_ignores_float_rounding_from_adjustment(df):
+    rounded = df.copy()
+    rounded["high"] = rounded[["open", "close"]].max(axis=1) * (1 - 1e-12)  # vendor rounding noise
+    assert not any("high/low" in p for p in validate_ohlcv(rounded))
 
 
 def test_no_lookahead_future_change_does_not_alter_past(df):

@@ -34,8 +34,12 @@ def synthetic_ohlcv(n: int = 2000, freq: str = "1h", start: str = "2022-01-01", 
                          "regime": reg}, index=idx)
 
 
-def validate_ohlcv(df: pd.DataFrame, max_gap: pd.Timedelta | None = None) -> list[str]:
-    """Data quality checks: returns a list of problems (empty == clean)."""
+def validate_ohlcv(df: pd.DataFrame, max_gap: pd.Timedelta | None = None, rel_tol: float = 1e-6) -> list[str]:
+    """Data quality checks: returns a list of problems (empty == clean).
+
+    High/low consistency uses a relative tolerance: adjusted vendor data (split/dividend
+    back-adjustment) produces float-rounding violations ~1e-12 that are not real defects.
+    Violations above `rel_tol` are reported with row count and worst magnitude."""
     problems = []
     if df.index.has_duplicates:
         problems.append("duplicate timestamps")
@@ -43,8 +47,12 @@ def validate_ohlcv(df: pd.DataFrame, max_gap: pd.Timedelta | None = None) -> lis
         problems.append("index not sorted")
     if (df[["open", "high", "low", "close"]] <= 0).any().any():
         problems.append("non-positive prices")
-    if ((df["high"] < df[["open", "close"]].max(axis=1)) | (df["low"] > df[["open", "close"]].min(axis=1))).any():
-        problems.append("high/low inconsistent with open/close")
+    hi_v = (df[["open", "close"]].max(axis=1) - df["high"]) / df["high"]
+    lo_v = (df["low"] - df[["open", "close"]].min(axis=1)) / df["low"]
+    worst = pd.concat([hi_v, lo_v], axis=1).max(axis=1)
+    bad = worst > rel_tol
+    if bad.any():
+        problems.append(f"high/low inconsistent with open/close: {int(bad.sum())} rows, worst {worst.max():.2e} relative")
     if df[["open", "high", "low", "close"]].isna().any().any():
         problems.append("missing prices")
     if max_gap is not None and len(df) > 1:
