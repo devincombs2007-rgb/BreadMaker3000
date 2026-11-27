@@ -19,6 +19,49 @@ def _load_ohlcv(path: str):
     return df[["open", "high", "low", "close", "volume"]]
 
 
+def _daily(a) -> int:
+    import os
+    from datetime import datetime, timezone
+
+    from . import health
+    from .config import load_settings
+    from .forward import run_daily
+    s = load_settings()
+    now = datetime.now(timezone.utc)
+    fwd = run_daily(s.kalshi.weather_stations, Path(a.state) / "forward.sqlite", now)
+    L = [f"# BreadMaker daily report - {now:%Y-%m-%d}", "",
+         "_Simulation only. Public data only (no Kalshi data). Weather data: Open-Meteo (CC BY 4.0), NWS CLI via IEM._", "",
+         "## Forward forecast log (pre-registered, settled against official NWS reports)",
+         f"- Issued today: {fwd['issued']} · settled today: {fwd['settled']}",
+         f"- Settled total: {fwd['scoreboard']['settled']} · pending: {fwd['scoreboard']['pending']} · since "
+         f"{fwd['scoreboard'].get('first_target')}"]
+    t = fwd["scoreboard"].get("tournament")
+    if t:
+        m = t["models"]["model"]
+        L.append(f"- Model Brier {m['brier']:.4f} vs Gaussian {t['models']['gaussian']['brier']:.4f} · "
+                 f"diff {m['diff_vs_baseline']:+.4f} [{m['ci95'][0]:+.4f}, {m['ci95'][1]:+.4f}] → **{m['verdict']}**")
+    else:
+        L.append("- Fewer than 50 settled forecasts: no accuracy verdict yet (by design).")
+    L += [f"- ⚠️ {k}: {v}" for k, v in fwd["errors"].items()]
+    from .forward import run_econ_daily
+    ec = run_econ_daily(Path(a.state) / "forward.sqlite", now)
+    L += ["", "## First-release economic data (BLS, recorded as published)"]
+    L += [f"- ⚠️ {ec['error']}"] if "error" in ec else [
+        f"- First releases tracked: {ec['first_releases_tracked']} · new months today: {ec['new_periods']} · "
+        f"revisions seen today: {ec['revisions_seen']}"]
+    findings = []
+    if os.environ.get("GH_TOKEN") and os.environ.get("GITHUB_REPOSITORY"):
+        findings = health.check(os.environ["GITHUB_REPOSITORY"], os.environ["GH_TOKEN"], now)
+        if len(fwd["errors"]) >= max(1, len(s.kalshi.weather_stations) // 2):
+            findings.append({"severity": "warning", "check": "forward-log data",
+                             "detail": f"{len(fwd['errors'])} station(s) failed today"})
+        L += ["", health.markdown(findings)]
+    Path(a.out).write_text("\n".join(L) + "\n")
+    print("\n".join(L))
+    Path(a.out).with_suffix(".health.json").write_text(json.dumps(findings))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="breadmaker", description="BreadMaker3000 (simulation only)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -41,8 +84,14 @@ def main(argv: list[str] | None = None) -> int:
     ml.add_argument("--horizon", type=int, default=12)
     ml.add_argument("--periods-per-year", type=float, default=24 * 365)
     sub.add_parser("safety-check", help="scan repo configs for live-trading risks")
+    dy = sub.add_parser("daily", help="daily research: forward forecast log, rankings, health, report")
+    dy.add_argument("--state", required=True, help="directory holding forward.sqlite (state chain)")
+    dy.add_argument("--out", default="daily_report.md")
+    rk = sub.add_parser("rankings", help="print market rankings as phone-friendly Markdown")
+    rk.add_argument("--hours", type=float, default=24)
     kr = sub.add_parser("kalshi-run", help="one Kalshi research/paper cycle (requires authorization)")
     kr.add_argument("--max-books", type=int, default=300)
+    kr.add_argument("--demo", action="store_true", help="use the Kalshi DEMO environment (separate gate and book)")
     sub.add_parser("kalshi-status", help="show whether Kalshi API access is allowed and why")
     vf = sub.add_parser("validate-forecasts", help="validate forecasting models on real public data")
     vf.add_argument("--out", default="validation_results")
@@ -56,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(hash_password(pw))
         return 0
+    if a.cmd == "daily":
+        return _daily(a)
     if a.cmd == "safety-check":
         from .safety_scan import scan
         problems = scan(Path(__file__).resolve().parent.parent)
@@ -68,19 +119,28 @@ def main(argv: list[str] | None = None) -> int:
     from .risk import KillSwitch
 
     s = load_settings()
+    if a.cmd == "rankings":
+        from .kalshi.tracking import rankings, rankings_markdown
+        print(rankings_markdown(rankings(connect(s.db_path), hours=a.hours)))
+        return 0
     if a.cmd == "kalshi-status":
+        from .config import kalshi_demo_access_allowed
         ok, why = kalshi_access_allowed(s.kalshi)
-        print(json.dumps({"kalshi_api_allowed": ok, "reason": why, "bankroll": s.kalshi.bankroll}))
+        dok, dwhy = kalshi_demo_access_allowed(s.kalshi_demo)
+        print(json.dumps({"kalshi_api_allowed": ok, "reason": why, "bankroll": s.kalshi.bankroll,
+                          "demo_api_allowed": dok, "demo_reason": dwhy}))
         return 0
     if a.cmd == "kalshi-run":
         from .kalshi.client import KalshiAccessDisabled, KalshiPublicClient
         from .kalshi.pipeline import run_cycle
+        kcfg = s.kalshi_demo if a.demo else s.kalshi
         try:
-            client = KalshiPublicClient(s.kalshi)
+            client = KalshiPublicClient(kcfg, demo=a.demo)
         except KalshiAccessDisabled as exc:
-            print(f"Kalshi access disabled: {exc}")
+            print(f"Kalshi {'DEMO ' if a.demo else ''}access disabled: {exc}")
             return 3
-        print(json.dumps(run_cycle(s, client, max_books=a.max_books), indent=2, default=str))
+        print(json.dumps(run_cycle(s, client, max_books=a.max_books, engine="kalshi_demo" if a.demo else "kalshi",
+                                   kcfg=kcfg), indent=2, default=str))
         return 0
     if a.cmd == "validate-forecasts":
         from .forecasting.validation import main as vmain

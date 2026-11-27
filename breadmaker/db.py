@@ -98,6 +98,10 @@ CREATE TABLE IF NOT EXISTS predictions (
     settled_at TEXT
 );
 CREATE INDEX IF NOT EXISTS predictions_ticker ON predictions(ticker);
+CREATE TABLE IF NOT EXISTS market_groups (
+    ticker TEXT PRIMARY KEY,
+    group_key TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS models (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,

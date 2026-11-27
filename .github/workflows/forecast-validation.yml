@@ -25,7 +25,9 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 25
+    env:
+      BREADMAKER_DATA_TERMS_ACCEPTED: ${{ vars.BREADMAKER_DATA_TERMS_ACCEPTED }}   # owner attestation only (licences.py)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

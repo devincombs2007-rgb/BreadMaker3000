@@ -17,7 +17,7 @@ from typing import Iterator
 
 import httpx
 
-from ..config import KalshiConfig, SafetyError, kalshi_access_allowed
+from ..config import KalshiConfig, SafetyError, _host, kalshi_access_allowed, kalshi_demo_access_allowed
 
 
 class KalshiAccessDisabled(RuntimeError):
@@ -48,11 +48,13 @@ class KalshiPublicClient:
     RETRY_STATUSES = {429, 500, 502, 503, 504}
 
     def __init__(self, cfg: KalshiConfig, env: dict | None = None, transport: httpx.BaseTransport | None = None,
-                 max_retries: int = 5, sleep=time.sleep):
-        ok, why = kalshi_access_allowed(cfg, env)
+                 max_retries: int = 5, sleep=time.sleep, demo: bool = False):
+        ok, why = (kalshi_demo_access_allowed if demo else kalshi_access_allowed)(cfg, env)
         if not ok:
             raise KalshiAccessDisabled(why)
         self.cfg = cfg
+        self.demo = demo
+        self.host = _host(cfg.base_url)
         self.base = cfg.base_url.rstrip("/")
         self.http = httpx.Client(timeout=20, transport=transport,
                                  headers={"User-Agent": "breadmaker3000-research/0.3 (read-only)"})
@@ -82,6 +84,8 @@ class KalshiPublicClient:
                 self.sleep(wait + random.uniform(0, delay / 2))
                 delay = min(delay * 2, 60)
                 continue
+            if _host(str(r.url)) != self.host:  # never follow a redirect to another (e.g. production) host
+                raise SafetyError(f"response came from unexpected host {_host(str(r.url))!r}")
             r.raise_for_status()
             return r.json()
         raise RuntimeError("unreachable")

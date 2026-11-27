@@ -23,7 +23,11 @@ class SafetyError(RuntimeError):
 
 
 # Kalshi: read-only public market data. These are the only hosts the client may call.
-KALSHI_ALLOWED_HOSTS = ("api.elections.kalshi.com", "demo-api.kalshi.co")
+KALSHI_PRODUCTION_HOSTS = ("api.elections.kalshi.com",)
+KALSHI_DEMO_HOSTS = ("external-api.demo.kalshi.co", "demo-api.kalshi.co")  # mock funds; separate accounts
+KALSHI_ALLOWED_HOSTS = KALSHI_PRODUCTION_HOSTS + KALSHI_DEMO_HOSTS
+KALSHI_DEMO_ATTESTATION_ENV = "KALSHI_DEMO_TERMS_ACCEPTED"
+KALSHI_DEMO_ATTESTATION_VALUE = "demo-terms-accepted"
 KALSHI_AUTHORIZATION_ENV = "KALSHI_ACCESS_AUTHORIZED"
 KALSHI_AUTHORIZATION_VALUE = "written-authorization-on-file"
 _URL_HOST = re.compile(r"^(?:[a-z]+://)?([^/:]+)", re.I)
@@ -46,8 +50,22 @@ def kalshi_access_allowed(cfg: "KalshiConfig", env: dict | None = None) -> tuple
         return False, "kalshi.api_enabled is false (default) - see KALSHI.md"
     if env.get(KALSHI_AUTHORIZATION_ENV) != KALSHI_AUTHORIZATION_VALUE:
         return False, f"{KALSHI_AUTHORIZATION_ENV} attestation missing - see KALSHI.md"
-    if _host(cfg.base_url) not in KALSHI_ALLOWED_HOSTS:
-        return False, f"base_url host {_host(cfg.base_url)!r} not allowed"
+    if _host(cfg.base_url) not in KALSHI_PRODUCTION_HOSTS:
+        return False, f"base_url host {_host(cfg.base_url)!r} is not the production host for this gate"
+    return True, "ok"
+
+
+def kalshi_demo_access_allowed(cfg: "KalshiConfig", env: dict | None = None) -> tuple[bool, str]:
+    """Kalshi DEMO (mock funds) - a separate gate that can only ever reach demo hosts:
+    config `kalshi_demo.api_enabled: true` AND env KALSHI_DEMO_TERMS_ACCEPTED=demo-terms-accepted
+    (owner attests the demo environment's terms have been read and accepted). Production stays OFF."""
+    env = os.environ if env is None else env
+    if _host(cfg.base_url) not in KALSHI_DEMO_HOSTS:
+        return False, f"demo gate refuses non-demo host {_host(cfg.base_url)!r}"
+    if not cfg.api_enabled:
+        return False, "kalshi_demo.api_enabled is false (default)"
+    if env.get(KALSHI_DEMO_ATTESTATION_ENV) != KALSHI_DEMO_ATTESTATION_VALUE:
+        return False, f"{KALSHI_DEMO_ATTESTATION_ENV} attestation missing"
     return True, "ok"
 
 
@@ -100,6 +118,13 @@ class KalshiConfig:
     min_edge: float = 0.03
     max_spread: float = 0.10
     min_hours_to_close: float = 1.0
+    max_group_exposure_pct: float = 0.25   # one budget for correlated outcomes (same-day weather, one game)
+    cash_reserve_pct: float = 0.50         # always keep at least this share of equity in cash
+    uncertainty_width_cap: float = 0.50    # interval width at which size shrinks to zero
+    drawdown_throttle_full: float = 0.20   # drawdown at which size reaches zero (= drawdown halt)
+    min_price: float = 0.03
+    max_price: float = 0.97
+    max_open_positions: int = 10
     taker_fee_rate: float = 0.07
     fee_rate_overrides: dict = field(default_factory=dict)  # series_ticker -> rate
     enabled_models: tuple = ("weather_high_temp", "crypto_price", "structural")
@@ -118,6 +143,13 @@ class KalshiConfig:
             "min_edge": (0.01, 1.0),
             "max_spread": (0.0, 0.5),
             "taker_fee_rate": (0.07, 1.0),  # never model fees below Kalshi's standard taker rate
+            "max_group_exposure_pct": (0.0, 0.5),
+            "cash_reserve_pct": (0.25, 1.0),
+            "uncertainty_width_cap": (0.05, 1.0),
+            "drawdown_throttle_full": (0.01, 0.30),
+            "min_price": (0.01, 0.5),
+            "max_price": (0.5, 0.99),
+            "max_open_positions": (1, 50),
         }
         for name, (lo, hi) in bounds.items():
             v = getattr(self, name)
@@ -133,6 +165,8 @@ class Settings:
     risk: RiskLimits
     engines: dict[str, EngineConfig] = field(default_factory=dict)
     kalshi: KalshiConfig = field(default_factory=KalshiConfig)
+    kalshi_demo: KalshiConfig = field(default_factory=lambda: KalshiConfig(
+        base_url="https://external-api.demo.kalshi.co/trade-api/v2"))
     raw: dict = field(default_factory=dict)
 
 
@@ -150,8 +184,12 @@ def load_settings(path: str | Path | None = None) -> Settings:
     kcfg = dict(raw.get("kalshi") or {})
     if "enabled_models" in kcfg:
         kcfg["enabled_models"] = tuple(kcfg["enabled_models"])
+    dcfg = {k: v for k, v in kcfg.items() if k not in ("api_enabled", "base_url")}
+    dcfg.update(raw.get("kalshi_demo") or {})
+    dcfg.setdefault("base_url", "https://external-api.demo.kalshi.co/trade-api/v2")
     return Settings(
         kalshi=KalshiConfig(**kcfg),
+        kalshi_demo=KalshiConfig(**dcfg),
         data_dir=data_dir,
         db_path=data_dir / "breadmaker.sqlite",
         kill_switch_path=data_dir / "KILL_SWITCH",

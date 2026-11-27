@@ -20,12 +20,27 @@ branch [`archive/trading-system-v0.2`](../../tree/archive/trading-system-v0.2).
 | Price | Executable YES/NO asks and depth from order books; conservative taker-fee model |
 | Decide | Trades only if the conservative probability beats the ask by ≥ 3¢ after fees. Size is fractional Kelly within position, event and total caps. **Zero allocation is normal.** |
 | Track | Every prediction and its timestamped evidence is logged. Settlements score Brier, log loss and calibration; the paper book shows returns and drawdown. |
-| Learn | Walk-forward recalibration using only settlements that happened before each prediction |
+| Size | $25 simulated bankroll: uncertainty shrink, drawdown throttle, correlation-group caps, 50% cash reserve, price bounds, max open positions. Every rejection reason is recorded. |
+| Rank | Dashboard and Markdown cards for allocations, near-misses and rejection reasons, built for phone width |
+| Learn | Walk-forward recalibration, adopted only if it is significantly better than no recalibration |
+| Report | Daily research run: a pre-registered forward forecast log on public data, settlement, health checks, and a GitHub issue alert if anything breaks |
+| Persist | A fail-closed state chain: a skipped run, an expired artifact or a failed download stops the simulation with "STATE LOST" instead of silently resetting the bankroll |
 
 ## Verified so far
 
 The forecasting models are validated **out-of-sample on real public data** (no Kalshi data needed):
-see [RESEARCH_RESULTS.md](RESEARCH_RESULTS.md). The Kalshi side (client, pricing, decisions, paper
+see [RESEARCH_RESULTS.md](RESEARCH_RESULTS.md). Summary:
+
+- **Weather and crypto:** calibrated to within 1–3 points. Crypto is now blocked until the exchanges' data terms are verified.
+- **MLB/NBA Elo:** significantly beats naive baselines, but FiveThirtyEight's NBA model beats ours. The
+  NFL results were withdrawn because their source had no licence.
+- **Machine-learning challengers:** LightGBM never beat the simpler established models.
+- **Economics:** nothing beat "same as last month".
+- **Parlays:** correlation-aware joint models were not significantly better than independence.
+
+Only models that passed are eligible for routing, and sports and economics still route nothing.
+
+The Kalshi side (client, pricing, decisions, paper
 book, tracking) is tested end-to-end against a mock API serving clearly labelled synthetic responses.
 It has **not** yet touched Kalshi.
 
@@ -33,7 +48,7 @@ It has **not** yet touched Kalshi.
 
 [KALSHI.md](KALSHI.md) (compliance and design) · [OWNER_SETUP.md](OWNER_SETUP.md) · [HOSTING.md](HOSTING.md) ·
 [ARCHITECTURE.md](ARCHITECTURE.md) · [SECURITY.md](SECURITY.md) · [PROGRESS.md](PROGRESS.md) ·
-[TEST_REPORT.md](TEST_REPORT.md) · [ROADMAP.md](ROADMAP.md) · [DEPLOYMENT.md](DEPLOYMENT.md)
+[TEST_REPORT.md](TEST_REPORT.md) · [ROADMAP.md](ROADMAP.md) · [DATA_SOURCES.md](DATA_SOURCES.md) · [DEPLOYMENT.md](DEPLOYMENT.md)
 
 ## Developer quick start
 
@@ -46,4 +61,6 @@ pip install -r requirements/research.lock && breadmaker validate-forecasts   # n
 ```
 
 Weather data by [Open-Meteo](https://open-meteo.com/) (CC BY 4.0). NWS climate reports via the
-Iowa Environmental Mesonet.
+Iowa Environmental Mesonet. Economic data from the U.S. Bureau of Labor Statistics. Sports data from FiveThirtyEight (CC BY 4.0).
+The information used here was obtained free of charge from and is copyrighted by Retrosheet.
+Interested parties may contact Retrosheet at www.retrosheet.org.

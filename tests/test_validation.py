@@ -74,5 +74,5 @@ def test_feed_get_retries_then_raises(monkeypatch):
     monkeypatch.setattr(feeds.httpx, "get", boom)
     import pytest
     with pytest.raises(httpx.ConnectTimeout):
-        feeds._get("https://example.invalid", {}, retries=2, sleep=lambda s: None)
+        feeds._get("https://api.open-meteo.com/v1/forecast", {}, retries=2, sleep=lambda s: None)
     assert len(calls) == 3

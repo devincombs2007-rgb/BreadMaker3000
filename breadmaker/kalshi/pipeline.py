@@ -42,13 +42,32 @@ def route(m: Market, settings: Settings) -> str | None:
     return None
 
 
-def run_cycle(settings: Settings, client: KalshiPublicClient, max_books: int = 300, now: datetime | None = None) -> dict:
+def correlation_group(m: Market, model: str | None) -> str:
+    """Outcomes likely to move together share one exposure budget."""
+    if model == "weather_high_temp":
+        d = weather_model.event_date(m.event_ticker)
+        return f"weather:{d}" if d else m.event_ticker
+    if model == "crypto_price" and m.close_time:
+        return f"crypto:{m.close_time.date()}"
+    return m.event_ticker
+
+
+def group_exposure(book: PaperBook, groups: dict[str, str], group: str) -> float:
+    return sum(pos.cost_basis for sym, pos in book.positions().items() if groups.get(sym.split("|")[0]) == group)
+
+
+def run_cycle(settings: Settings, client: KalshiPublicClient, max_books: int = 300, now: datetime | None = None,
+              engine: str = ENGINE, kcfg=None) -> dict:
+    kcfg = kcfg or settings.kalshi
     now = now or datetime.now(timezone.utc)
     conn = connect(settings.db_path)
     ev = EvidenceStore(conn)
-    book = PaperBook(conn, settings.kalshi.bankroll)
+    book = PaperBook(conn, kcfg.bankroll, engine)
+    groups = {r[0]: r[1] for r in conn.execute("SELECT ticker, group_key FROM market_groups")}
+    from .tracking import learned_adjustment
+    learned: dict = {}
     kill = KillSwitch(settings.kill_switch_path)
-    halted = kill.engaged() or EngineHalts(settings.data_dir).active(ENGINE, now) is not None
+    halted = kill.engaged() or EngineHalts(settings.data_dir).active(engine, now) is not None
     summary: dict = {"run_at": now.isoformat(timespec="seconds"), "categories": Counter(), "routed": Counter(),
                      "rejections": Counter(), "decisions": [], "combinations": [], "incoherent_quotes": [],
                      "settled": 0, "halted": halted}
@@ -82,10 +101,20 @@ def run_cycle(settings: Settings, client: KalshiPublicClient, max_books: int = 3
             result = _crypto(m, ev, crypto_cache, now)
         decision = None
         if isinstance(result, Forecast) and not halted:
-            fr = fee_rate(settings.kalshi, m.series_ticker)
-            decision = decide(m, quote, result, settings.kalshi, equity=book.equity_at_cost(), cash=book.cash(),
+            fr = fee_rate(kcfg, m.series_ticker)
+            if model not in learned:
+                learned[model] = learned_adjustment(conn, model, now)
+            rc, verdict = learned[model]
+            if rc is not None:  # significance-gated recalibration learned from settled predictions
+                result = Forecast(rc.apply(result.p), rc.apply(result.p_low), rc.apply(result.p_high), result.model,
+                                  result.issued_at, result.evidence_ids, {**result.detail, "recalibrated": verdict})
+            g = correlation_group(m, model)
+            groups[m.ticker] = g
+            conn.execute("INSERT OR REPLACE INTO market_groups(ticker, group_key) VALUES (?,?)", (m.ticker, g))
+            decision = decide(m, quote, result, kcfg, equity=book.equity_at_cost(), cash=book.cash(),
                               event_exposure=book.exposure(m.event_ticker), total_exposure=book.exposure(),
-                              now=now, fee_rate=fr)
+                              now=now, fee_rate=fr, group_exposure=group_exposure(book, groups, g),
+                              peak_equity=book.peak_equity(), open_positions=len(book.positions()))
         pid = log_prediction(conn, m, result, quote, decision, now)
         if isinstance(result, Rejection):
             summary["rejections"][result.reason.split(":")[0][:80]] += 1
@@ -104,7 +133,7 @@ def run_cycle(settings: Settings, client: KalshiPublicClient, max_books: int = 3
             continue
         quotes = {m.ticker: parse_orderbook(client.orderbook(m.ticker), now) for m in ladder}
         books_used += len(ladder)
-        combos, incoherent = structural.ladder_opportunities(ladder, quotes, settings.kalshi.taker_fee_rate)
+        combos, incoherent = structural.ladder_opportunities(ladder, quotes, kcfg.taker_fee_rate)
         summary["combinations"] += [c.__dict__ for c in combos]
         summary["incoherent_quotes"] += incoherent
 
@@ -120,7 +149,7 @@ def run_cycle(settings: Settings, client: KalshiPublicClient, max_books: int = 3
                 record_settlement(conn, t, md["result"], now)
                 book.settle(t, md["result"], now)
                 summary["settled"] += 1
-    book.ledger.snapshot(ENGINE, book.equity_at_cost(), book.cash(), ts=now.isoformat(timespec="seconds"))
+    book.ledger.snapshot(engine, book.equity_at_cost(), book.cash(), ts=now.isoformat(timespec="seconds"))
     summary["requests"] = client.requests_made
     summary["cash"], summary["equity_at_cost"] = book.cash(), book.equity_at_cost()
     return json.loads(json.dumps(summary, default=lambda o: dict(o) if isinstance(o, Counter) else str(o)))
@@ -162,8 +191,14 @@ def _crypto(m: Market, ev: EvidenceStore, cache: dict, now: datetime):
             ts = sorted(closes)
             eid = ev.record_provenance(prov, {"hours": len(ts), "last_ms": ts[-1]})
             cache[base] = (closes[ts[-1]], np.diff(np.log([closes[t] for t in ts])), [eid])
-        except Exception:  # noqa: BLE001
-            cache[base] = (None, np.array([]), [])
+        except Exception as exc:  # noqa: BLE001
+            from ..forecasting.licences import LicenceUnverified
+            if isinstance(exc, LicenceUnverified):
+                cache[base] = ("licence", str(exc)[:200])
+            else:
+                cache[base] = (None, np.array([]), [])
+    if cache[base][0] == "licence":
+        return Rejection("crypto_price", f"data terms unverified: {cache[base][1]}")
     spot, lr, ids = cache[base]
     if m.close_time is None:
         return Rejection("crypto_price", "no close time")

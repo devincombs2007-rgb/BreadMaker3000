@@ -1,5 +1,86 @@
 # Test report
 
+## Iteration 5 - PR #3 review fixes (2026-11-27)
+
+| Area | Result |
+|---|---|
+| Unit/integration tests | **180 passed** locally (core venv); 22 new or rewritten tests in this round |
+| CI on `48cace5` | run 45928635198: **all 4 jobs green**: core tests on **amd64**, unit tests plus native image on **arm64**, docker build, gitleaks. It ran **once**: the `pull_request` event only, so no double run. |
+| Real-data validation | run 45928630946 (success): weather 7/7 and parlays unchanged; MLB unchanged; **NBA 39,350 games, reproduced the sandbox numbers exactly**; NFL **not obtained** (FiveThirtyEight file gone); crypto **refused by the licence gate** (as designed); economics unchanged |
+| Workflows | GitHub JSON schema (check-jsonschema 0.39.0) + actionlint 1.7.7: clean; new policy tests: every job has a timeout, disabled Kalshi workflows start no runner, CI does not double-run |
+| Safety scan | PASS |
+
+**Finding 1 (seal lifecycle):** reproduced on the old code. Restore → insert one row → `seal()`
+raised `StateLost: hash mismatch for breadmaker.sqlite`, so **every second run of every state chain
+would have failed**. Fixed:
+
+- `restore()` writes `RESTORE_RECEIPT.json` naming the manifest it verified.
+- `seal()` chains from that receipt and checks that the manifest is byte-identical. It also refuses
+  lost files and lost rows, because the ledgers are append-only.
+
+**Finding 2 (end-to-end):**
+
+- `test_end_to_end_seven_cycles_with_real_forward_log` runs 7 consecutive restore → modify → seal →
+  upload cycles on a fresh runner directory each time, with an old artifact expiring part-way,
+  using the real forward-log writer. It checks generation numbers, hash links and row growth.
+- `test_cli_main_runs_five_cycles` runs the exact CLI commands the workflows use, 5 times in a row.
+
+**Findings 3 and 4:**
+
+- No artifact → `StateLost` unless the owner's init phrase is given. This is tested after a full
+  purge of 4 generations.
+- Newest artifact corrupt and an older one valid → `RollbackRequired`, exit 2, nothing left in the
+  state dir. It continues only with the rollback phrase, and other phrases don't work.
+
+**Finding 5:** a missing or empty health report, or a failed or cancelled job, becomes an error
+finding. Each workflow gets its own alert issue, so a healthy run can't close another workflow's
+alert. If the Python alert can't even run, a `gh` CLI fallback posts it.
+
+**Finding 6:**
+
+- The licence registry refuses unregistered or unverified sources before any request.
+- A test checks that every URL in the forecasting code is registered.
+- nflverse is blocked (no licence file), and crypto venues are blocked (terms unverified).
+
+**Finding 9:**
+
+- The workflow policy tests above.
+- The `actions-minutes` health check is tested with a mocked API at 30%, 60% and 90%.
+
+**Not verified:**
+
+- The exchange, Philadelphia Fed and ALFRED terms: those hosts are unreachable from the build
+  environment. An attempt to fetch the pages through a temporary CI workflow was blocked by the
+  session's permission policy, and the workflow was removed without being pushed.
+- The live state chain on GitHub: it starts after merge and the owner's init run.
+
+---
+
+## Iteration 4 - v0.4 expanded prediction intelligence (2026-11-27)
+
+| Area | Result |
+|---|---|
+| Unit/integration tests | **158 passed** locally (core venv). New: state chain (11), models/tournament/joint (13), bankroll + learning, daily/health/rankings, Demo gate |
+| CI on `90793e6` and `b04b633` | runs 45924219388 and 45924288371: **all jobs green**, including **core tests on amd64 and arm64** (`ubuntu-24.04-arm`), schema, safety, secret scan, docker build |
+| Real-data validation | run 45924219429: weather 7/7 stations, crypto, parlays 4 pairs, NFL, MLB, CPI, unemployment; **NBA not obtained** (source gone). Results in RESEARCH_RESULTS.md |
+| Kalshi production and Demo gates | `kalshi-run` and `kalshi-run --demo` exit 3 with no network call when off; neither attestation opens the other gate (tested) |
+| State chain | tested against a mocked GitHub API: no artifact ever → first-run init; all expired, download failure or listing error → STATE LOST; skipped runs don't reset; corrupted hash or SQLite → falls back to an older generation with a warning, or STATE LOST; reset only with the exact phrase; zip-slip refused |
+| Workflows | all files pass GitHub's JSON schema (check-jsonschema 0.39.0) and actionlint 1.7.7; the Demo workflow's config edit was verified to change only the demo section |
+| Safety scan / gitleaks | PASS / no leaks |
+
+Bugs found and fixed while testing this iteration:
+- **old Kalshi state restore could silently reset the $25 book:** a skipped or failed run, an expired
+  artifact, or a failed download all fell through to a fresh book;
+- forward log let a re-run add thresholds from a newer forecast ("forecast shopping") → one set per
+  station and day, first set stands;
+- recalibration adoption had no significance test → block-bootstrap gate (and a test that small gains are NOT adopted);
+- a sizing test asserted a cap that could not bind (test arithmetic, not code).
+
+Not tested: any live Kalshi or Kalshi Demo request (both off); scheduled runs (fire only on `main`, after merge);
+the first real state-chain restore (needs a prior artifact on `main`).
+
+---
+
 ## Iteration 3 - Kalshi pivot (2026-11-27)
 
 | Area | Result |

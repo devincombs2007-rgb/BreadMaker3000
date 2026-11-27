@@ -5,60 +5,84 @@ name: kalshi-paper
 #   2. the repository is PRIVATE (Kalshi Developer Agreement v1.1 s3.1 forbids sharing API data with third
 #      parties; artifacts, logs and summaries of a public repo are visible to others),
 #   3. the code-level gate (config + KALSHI_ACCESS_AUTHORIZED attestation) passes.
-# State (SQLite book) is carried between runs as a short-lived private artifact. Simulation only.
+# State (SQLite book) is carried between runs by a fail-closed artifact chain (breadmaker/statechain.py):
+# skipped runs, expired artifacts or failed downloads can never silently reset the bankroll. Simulation only.
 
 on:
   schedule:
     - cron: "41 */4 * * *"       # every 4 h; schedules only fire on the default branch
   workflow_dispatch:
+    inputs:
+      reset_confirmation:
+        description: "Only to discard lost history: type the exact reset phrase from breadmaker/statechain.py"
+        required: false
+        default: ""
+      init_confirmation:
+        description: "Only for the very first run (no state exists yet): type the exact init phrase from breadmaker/statechain.py"
+        required: false
+        default: ""
+      rollback_confirmation:
+        description: "Only to continue from an OLDER state after STATE LOST: type the exact rollback phrase from breadmaker/statechain.py"
+        required: false
+        default: ""
 
 permissions:
   contents: read
   actions: read
+  issues: write      # failure alert issue only
 
 concurrency:
   group: kalshi-paper
   cancel-in-progress: false
 
 jobs:
-  guard:
-    runs-on: ubuntu-24.04
-    outputs:
-      allowed: ${{ steps.g.outputs.allowed }}
-    steps:
-      - id: g
-        run: |
-          if [ "${{ vars.KALSHI_API_ENABLED }}" != "true" ]; then
-            echo "Kalshi cycle disabled: repository variable KALSHI_API_ENABLED is not 'true' (see KALSHI.md)."; echo "allowed=false" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.repository.private }}" != "true" ]; then
-            echo "Kalshi cycle refused: repository is PUBLIC; Kalshi data must not be shared with third parties."; echo "allowed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "allowed=true" >> "$GITHUB_OUTPUT"
-          fi
-
   cycle:
-    needs: guard
-    if: needs.guard.outputs.allowed == 'true'
+    # Evaluated WITHOUT starting a runner: while disabled, scheduled runs cost zero Actions minutes
+    # (a guard job would bill >= 1 minute per run - ~180 min/month at 6 runs/day in a private repo).
+    if: vars.KALSHI_API_ENABLED == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     env:
       BREADMAKER_DATA_DIR: ${{ github.workspace }}/state
       KALSHI_ACCESS_AUTHORIZED: written-authorization-on-file
       GH_TOKEN: ${{ github.token }}
+      BREADMAKER_DATA_TERMS_ACCEPTED: ${{ vars.BREADMAKER_DATA_TERMS_ACCEPTED }}   # owner attestation only (licences.py)
+      STATE_RESET_CONFIRMATION: ${{ inputs.reset_confirmation }}
+      STATE_INIT_CONFIRMATION: ${{ inputs.init_confirmation }}
+      STATE_ROLLBACK_CONFIRMATION: ${{ inputs.rollback_confirmation }}
     steps:
+      - name: Refuse in a public repository (Kalshi data must not be shared with third parties)
+        run: |
+          test "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" = "true" || {
+            echo "::error::Repository is PUBLIC: Kalshi cycle refused (see KALSHI.md)"; exit 1; }
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - run: pip install -r requirements/research.lock && pip install --no-deps -e .
-      - name: Restore previous paper-trading state (latest successful run's artifact)
-        run: |
-          mkdir -p state
-          run=$(gh run list --workflow kalshi-paper.yml --status success --limit 1 --json databaseId -q '.[0].databaseId' || true)
-          if [ -n "$run" ]; then gh run download "$run" -n kalshi-state -D state || echo "no previous state"; fi
+      - name: Restore paper-trading state (fail-closed state chain; never silently resets)
+        run: python -m breadmaker.statechain restore --name kalshi-state --dir state
       - name: Enable API in config for this run (the attestation env var is the second gate)
         run: |
           sed -i 's/^  api_enabled: false/  api_enabled: true/' config/breadmaker.yaml
       - name: Research + paper cycle
         run: breadmaker kalshi-run --max-books 300 > state/last_run.json
+      - name: Seal new state generation
+        run: python -m breadmaker.statechain seal --dir state
       - uses: actions/upload-artifact@v4
-        with: {name: kalshi-state, path: state, retention-days: 14}
+        with: {name: kalshi-state, path: state, retention-days: 90, if-no-files-found: error}
+      - name: Failure alert (rolling GitHub issue for this workflow)
+        id: alert
+        if: always()
+        run: >-
+          python -m breadmaker.health alert -
+          "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          "${{ job.status }}" kalshi-paper
+      - name: Fallback alert (the Python alert could not run, e.g. install failed)
+        if: always() && steps.alert.outputs.posted != 'true'
+        env:
+          T: "BreadMaker health alert (kalshi-paper)"
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body="The kalshi-paper workflow failed before its health alert could run (job status: ${{ job.status }}). Run: $RUN"
+          n=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --json number,title --jq ".[] | select(.title==env.T) | .number" | head -n1)
+          if [ -n "$n" ]; then gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "$body"; else gh issue create -R "$GITHUB_REPOSITORY" --title "$T" --body "$body"; fi
